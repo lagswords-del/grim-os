@@ -22,190 +22,276 @@ note()  { printf '%s%s%s\n' "$G" "$*" "$N"; }
 fail()  { printf '\n%s!! %s%s\n   The log is in %s\n' "$R" "$*" "$N" "$LOG"; exit 1; }
 step()  { printf '%s::%s %s\n' "$R" "$N" "$1"; shift; "$@" >>"$LOG" 2>&1 || fail "failed: $*"; }
 
-# choose "question" opt1 desc1 opt2 desc2 ... -> sets REPLY_VAL to the chosen opt
+# If the keyboard input ends (a script, or the console closing), stop instead of asking forever
+eof() { printf '\nNo more input: stopping. Nothing was changed.\n'; exit 1; }
+
+# Every question takes "b" to go back one step: the helper returns BACK and the step stops.
+BACK=10
+backhint() { printf '%s(b goes back)%s\n' "$G" "$N"; }
+
+# choose "question" opt1 desc1 opt2 desc2 ... -> REPLY_VAL
 choose() {
-    local q=$1; shift
+    local q=$1 i n; shift
     local -a opts=() descs=()
     while (($#)); do opts+=("$1"); descs+=("$2"); shift 2; done
     while :; do
         printf '%s%s%s\n' "$B" "$q" "$N"
         for i in "${!opts[@]}"; do printf '  %s%2d%s  %s\n' "$R" $((i + 1)) "$N" "${descs[$i]}"; done
-        read -rp "> " n
-        if [[ $n =~ ^[0-9]+$ ]] && ((n >= 1 && n <= ${#opts[@]})); then REPLY_VAL=${opts[$((n - 1))]}; echo; return; fi
-        echo "Type a number from 1 to ${#opts[@]}."
+        printf '   %sb%s  back\n' "$R" "$N"
+        read -rp "> " n || eof
+        [[ $n == b || $n == B ]] && return $BACK
+        if [[ $n =~ ^[0-9]+$ ]] && ((n >= 1 && n <= ${#opts[@]})); then REPLY_VAL=${opts[$((n - 1))]}; echo; return 0; fi
+        echo "Type a number from 1 to ${#opts[@]}, or b to go back."
     done
 }
 
 # ask "question" default -> REPLY_VAL
 ask() {
     local q=$1 def=${2:-}
-    read -rp "$(printf '%s%s%s%s ' "$B" "$q" "$N" "${def:+ ${G}[$def]${N}}")" REPLY_VAL
+    read -rp "$(printf '%s%s%s%s ' "$B" "$q" "$N" "${def:+ ${G}[$def]${N}}")" REPLY_VAL || eof
+    [[ $REPLY_VAL == b ]] && return $BACK
     REPLY_VAL=${REPLY_VAL:-$def}
+    return 0
 }
 
-yesno() { local a; read -rp "$(printf '%s%s%s [y/n] ' "$B" "$1" "$N")" a; [[ $a == [yY]* ]]; }
+# yesno "question": 0 = yes, 1 = no, BACK = back
+yesno() {
+    local a
+    while :; do
+        read -rp "$(printf '%s%s%s [y/n, b back] ' "$B" "$1" "$N")" a || eof
+        case $a in [yY]*) return 0 ;; [nN]*) return 1 ;; b|B) return $BACK ;; esac
+    done
+}
 
 password() {   # password "who" -> REPLY_VAL
     local a b
     while :; do
-        read -rsp "$(printf '%sPassword for %s:%s ' "$B" "$1" "$N")" a; echo
-        read -rsp "$(printf '%sAgain:%s ' "$B" "$N")" b; echo
+        read -rsp "$(printf '%sPassword for %s%s %s(b + Enter goes back)%s ' "$B" "$1:" "$N" "$G" "$N")" a || eof; echo
+        [[ $a == b ]] && return $BACK
+        read -rsp "$(printf '%sAgain:%s ' "$B" "$N")" b || eof; echo
         [[ -z $a ]] && { echo "It can't be empty."; continue; }
-        [[ $a == "$b" ]] && { REPLY_VAL=$a; return; }
+        [[ $a == "$b" ]] && { REPLY_VAL=$a; return 0; }
         echo "They don't match. Try again."
     done
 }
 
 part() { [[ $1 =~ (nvme|mmcblk|loop) ]] && echo "${1}p$2" || echo "$1$2"; }
 
-# ------------------------------------------------------------------ the questions
+# ------------------------------------------------------------------ the questions (one function per step)
+step_mode() {
+    title "1. Offline or online install"
+    choose "Offline or online install?" \
+        offline "Offline: everything from this USB (no internet needed)" \
+        online  "Online: the newest packages from the internet" || return
+    MODE=$REPLY_VAL
+    if [[ $MODE == online ]]; then
+        if ! grim-wifi --check; then
+            echo "You're not online yet. Let's find a network."
+            grim-wifi
+            grim-wifi --check || { echo "Still offline: switching to an offline install."; MODE=offline; }
+        else note "You're online."; fi
+    fi
+}
+
+step_keyboard() {
+    local t
+    title "2. Keyboard"
+    while :; do
+        choose "Keyboard layout?" us "US (us)" uk "UK (uk)" de "German (de)" fr "French (fr)" es "Spanish (es)" \
+            it "Italian (it)" se "Swedish (se)" no "Norwegian (no)" pl "Polish (pl)" br-abnt2 "Brazilian (br-abnt2)" \
+            dvorak "Dvorak (dvorak)" other "Another one..." || return
+        KEYMAP=$REPLY_VAL
+        if [[ $KEYMAP == other ]]; then
+            while :; do
+                ask "Keymap name (like 'pt-latin1', 'cz', 'jp106'):" us || continue 2
+                KEYMAP=$REPLY_VAL
+                find /usr/share/kbd/keymaps -name "$KEYMAP.map*" | grep -q . && break
+                echo "No keymap called $KEYMAP. Some close ones:"
+                find /usr/share/kbd/keymaps -name "*${KEYMAP:0:2}*.map*" -printf '  %f\n' | sed 's/\.map.*//' | sort -u | head -8
+            done
+        fi
+        loadkeys "$KEYMAP" 2>/dev/null
+        # the test line: type with the new layout and check the symbols come out right
+        printf '\n%sTest it:%s type some letters and symbols, like  @ " £ # / ? ; :  and press Enter.\n' "$B" "$N"
+        read -rp "  test > " t || eof
+        printf '  You typed: %s%s%s\n\n' "$B" "$t" "$N"
+        choose "Is that what you pressed?" yes "Yes, keep $KEYMAP" no "No, pick another layout" || continue
+        [[ $REPLY_VAL == yes ]] && return 0
+    done
+}
+
+step_tz() {
+    title "3. Time zone"
+    while :; do
+        ask "Your time zone (like Europe/London, America/New_York, Asia/Tokyo):" "Europe/London" || return
+        TZONE=$REPLY_VAL
+        [[ -f /usr/share/zoneinfo/$TZONE ]] && return 0
+        echo "Not found. Some that match:"; (cd /usr/share/zoneinfo && find . -type f | sed 's|^\./||' | grep -i "${TZONE##*/}" | head -8)
+    done
+}
+
+step_names() {
+    title "4. Names and passwords"
+    backhint
+    while :; do ask "Computer name:" "${HOSTNAME_:-grimvoid}" || return; HOSTNAME_=$REPLY_VAL
+        [[ $HOSTNAME_ =~ ^[a-zA-Z0-9-]{1,63}$ ]] && break; echo "Letters, numbers and - only."; done
+    while :; do ask "Your user name (lowercase):" "${USERNAME_:-}" || return; USERNAME_=$REPLY_VAL
+        [[ $USERNAME_ =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] && break; echo "Lowercase letters, numbers, _ and - (start with a letter)."; done
+    password "$USERNAME_" || return; USERPASS=$REPLY_VAL
+    yesno "Use the same password for root (the admin account)?"; local r=$?
+    ((r == BACK)) && return $BACK
+    if ((r == 0)); then ROOTPASS=$USERPASS; else password root || return; ROOTPASS=$REPLY_VAL; fi
+    choose "Your shell?" bash "bash (the usual)" fish "fish (suggestions as you type)" zsh "zsh" || return
+    SHELL_=$REPLY_VAL
+}
+
+step_disk() {
+    title "5. Disk"
+    local -a DISKS args PARTS; local LIVE d dev p
+    mapfile -t DISKS < <(lsblk -dpno NAME,SIZE,MODEL,TYPE | awk '$NF=="disk" && $1 !~ /zram|loop|sr/' | sed 's/ disk$//')
+    LIVE=$(findmnt -no SOURCE /run/initramfs/live 2>/dev/null | sed -E 's/p?[0-9]+$//')
+    ((${#DISKS[@]})) || fail "No disks found."
+    for d in "${DISKS[@]}"; do
+        dev=${d%% *}
+        [[ -n $LIVE && $dev == "$LIVE" ]] && continue
+        args+=("$dev" "$d")
+    done
+    ((${#args[@]})) || fail "The only disk is this USB."
+    choose "Which disk should Grim Void go on?" "${args[@]}" || return
+    DISK=$REPLY_VAL
+    lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINTS "$DISK"; echo
+    choose "How should the disk be used?" \
+        whole  "Erase the whole disk and use it for Grim Void" \
+        manual "Use partitions I already made (keeps other systems, like Windows)" || return
+    PARTMODE=$REPLY_VAL
+    FORMAT_ESP=yes; ROOTP=""; ESP=""
+    if [[ $PARTMODE == manual ]]; then
+        mapfile -t PARTS < <(lsblk -lnpo NAME,SIZE,FSTYPE,LABEL,TYPE "$DISK" | awk '$NF=="part"' | sed 's/ part$//')
+        ((${#PARTS[@]})) || { echo "$DISK has no partitions. Make some with cfdisk first, or pick another disk."; return $BACK; }
+        args=(); for p in "${PARTS[@]}"; do args+=("${p%% *}" "$p"); done
+        choose "Which partition is for Grim Void? (it gets formatted as ext4)" "${args[@]}" || return
+        ROOTP=$REPLY_VAL
+        if [[ $UEFI == yes ]]; then
+            while :; do
+                choose "Which partition is the EFI system partition (the small FAT one)?" "${args[@]}" || return
+                ESP=$REPLY_VAL
+                [[ $ESP != "$ROOTP" ]] && break
+                echo "That's the Grim Void partition. Pick the EFI one."
+            done
+            if [[ $(lsblk -no FSTYPE "$ESP") == vfat ]]; then FORMAT_ESP=no; note "The EFI partition is kept as it is (other systems stay bootable)."
+            else yesno "$ESP isn't FAT. Format it as an EFI partition?" || return $BACK; fi
+        fi
+    fi
+}
+
+step_kernel() {
+    title "6. Kernel"
+    choose "Which Linux kernel?" linux-grim "Linux Grim: ${GRIM_KERNEL_DESC[linux-grim]}" linux6.18 "Linux: ${GRIM_KERNEL_DESC[linux6.18]}" || return
+    KERNEL=$REPLY_VAL
+}
+
+step_desktops() {
+    title "7. Desktops"
+    local picks n ok de i
+    printf '%sWhich desktops? Type the numbers with spaces (like: 1 3), or 0 for none.%s\n' "$B" "$N"
+    for i in "${!GRIM_DE_ORDER[@]}"; do de=${GRIM_DE_ORDER[$i]}; printf '  %s%d%s  %-8s %s\n' "$R" $((i + 1)) "$N" "${GRIM_DE_NAME[$de]}" "$G${GRIM_DE_DESC[$de]}$N"; done
+    printf '  %s0%s  none (a console system; you can add one later with grimhelp)\n' "$R" "$N"
+    printf '  %sb%s  back\n' "$R" "$N"
+    while :; do
+        read -rp "> " picks || eof
+        [[ $picks == b ]] && return $BACK
+        DESKTOPS=(); ok=1
+        for n in $picks; do
+            [[ $n == 0 ]] && continue
+            if [[ $n =~ ^[0-9]+$ ]] && ((n >= 1 && n <= ${#GRIM_DE_ORDER[@]})); then DESKTOPS+=("${GRIM_DE_ORDER[$((n - 1))]}"); else ok=0; fi
+        done
+        ((ok)) && [[ -n $picks ]] && break
+        echo "Type numbers from the list, like: 1 3 (or b to go back)"
+    done
+    DESKTOP=none
+    if ((${#DESKTOPS[@]} == 1)); then DESKTOP=${DESKTOPS[0]}
+    elif ((${#DESKTOPS[@]} > 1)); then
+        local -a args=(); for de in "${DESKTOPS[@]}"; do args+=("$de" "${GRIM_DE_NAME[$de]}"); done
+        choose "Which one should start when you log in?" "${args[@]}" ask "Ask me every time" || return
+        DESKTOP=$REPLY_VAL
+    fi
+}
+
+step_extras() {
+    title "8. Extras"
+    choose "Update automatically?" daily "Yes, once a day (recommended)" weekly "Yes, once a week" off "No, I'll run 'grimctl update' myself" || return
+    AUTOUPD=$REPLY_VAL
+    choose "When Grim Void starts:" desktop "Start normally (desktop after login)" lowram "Low-RAM mode (console only, nothing else running)" || return
+    BOOTMODE=$REPLY_VAL
+}
+
+STEPS=(step_mode step_keyboard step_tz step_names step_disk step_kernel step_desktops step_extras)
+STEP_NAMES=("Offline or online" "Keyboard" "Time zone" "Names and passwords" "Disk" "Kernel" "Desktops" "Extras")
+
 clear
 grimfetch --color --logo void 2>/dev/null | head -20
 printf '%sWelcome to the Grim Void %s installer.%s\n' "$B" "$GRIM_VERSION" "$N"
-note "Answer with a number and Enter. Ctrl+C stops at any time (nothing changes until the last step)."
+note "Answer with a number and Enter. b goes back a step. Ctrl+C stops (nothing changes until the last step)."
 UEFI=no; [[ -d /sys/firmware/efi ]] && UEFI=yes
 note "This PC boots with $([[ $UEFI == yes ]] && echo UEFI || echo "BIOS (legacy)")."
 
-title "1. Offline or online install"
-choose "Offline or online install?" \
-    offline "Offline: everything from this USB (no internet needed)" \
-    online  "Online: the newest packages from the internet"
-MODE=$REPLY_VAL
-if [[ $MODE == online ]]; then
-    if ! grim-wifi --check; then
-        echo "You're not online yet. Let's find a network."
-        grim-wifi
-        grim-wifi --check || { echo "Still offline: switching to an offline install."; MODE=offline; }
-    else note "You're online."; fi
-fi
-
-title "2. Keyboard"
-choose "Keyboard layout?" us "US (us)" uk "UK (uk)" de "German (de)" fr "French (fr)" es "Spanish (es)" \
-    it "Italian (it)" se "Swedish (se)" no "Norwegian (no)" pl "Polish (pl)" br-abnt2 "Brazilian (br-abnt2)" other "Another one..."
-KEYMAP=$REPLY_VAL
-if [[ $KEYMAP == other ]]; then
-    while ask "Keymap name (like 'dvorak' or 'pt-latin1'):" us; KEYMAP=$REPLY_VAL; ! find /usr/share/kbd/keymaps -name "$KEYMAP.map*" | grep -q .; do echo "No keymap called $KEYMAP."; done
-fi
-loadkeys "$KEYMAP" 2>/dev/null
-
-title "3. Time zone"
-while :; do
-    ask "Your time zone (like Europe/London, America/New_York, Asia/Tokyo):" "Europe/London"
-    TZONE=$REPLY_VAL
-    [[ -f /usr/share/zoneinfo/$TZONE ]] && break
-    echo "Not found. Some that match:"; (cd /usr/share/zoneinfo && find . -type f | sed 's|^\./||' | grep -i "${TZONE##*/}" | head -8)
-done
-
-title "4. Names and passwords"
-while ask "Computer name:" grimvoid; HOSTNAME_=$REPLY_VAL; [[ ! $HOSTNAME_ =~ ^[a-zA-Z0-9-]{1,63}$ ]]; do echo "Letters, numbers and - only."; done
-while ask "Your user name (lowercase):" ""; USERNAME_=$REPLY_VAL; [[ ! $USERNAME_ =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; do echo "Lowercase letters, numbers, _ and - (start with a letter)."; done
-password "$USERNAME_"; USERPASS=$REPLY_VAL
-if yesno "Use the same password for root (the admin account)?"; then ROOTPASS=$USERPASS; else password root; ROOTPASS=$REPLY_VAL; fi
-choose "Your shell?" bash "bash (the usual)" fish "fish (suggestions as you type)" zsh "zsh"
-SHELL_=$REPLY_VAL
-
-title "5. Disk"
-mapfile -t DISKS < <(lsblk -dpno NAME,SIZE,MODEL,TYPE | awk '$NF=="disk" && $1 !~ /zram|loop|sr/' | sed 's/ disk$//')
-LIVE=$(findmnt -no SOURCE /run/initramfs/live 2>/dev/null | sed -E 's/p?[0-9]+$//')
-((${#DISKS[@]})) || fail "No disks found."
-args=()
-for d in "${DISKS[@]}"; do
-    dev=${d%% *}
-    [[ -n $LIVE && $dev == "$LIVE" ]] && continue
-    args+=("$dev" "$d")
-done
-((${#args[@]})) || fail "The only disk is this USB."
-choose "Which disk should Grim Void go on?" "${args[@]}"
-DISK=$REPLY_VAL
-lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINTS "$DISK"; echo
-choose "How should the disk be used?" \
-    whole  "Erase the whole disk and use it for Grim Void" \
-    manual "Use partitions I already made (keeps other systems, like Windows)"
-PARTMODE=$REPLY_VAL
-FORMAT_ESP=yes
-if [[ $PARTMODE == manual ]]; then
-    mapfile -t PARTS < <(lsblk -lnpo NAME,SIZE,FSTYPE,LABEL,TYPE "$DISK" | awk '$NF=="part"' | sed 's/ part$//')
-    ((${#PARTS[@]})) || fail "$DISK has no partitions. Make some with cfdisk first."
-    args=(); for p in "${PARTS[@]}"; do args+=("${p%% *}" "$p"); done
-    choose "Which partition is for Grim Void? (it gets formatted as ext4)" "${args[@]}"
-    ROOTP=$REPLY_VAL
-    if [[ $UEFI == yes ]]; then
-        choose "Which partition is the EFI system partition (the small FAT one)?" "${args[@]}"
-        ESP=$REPLY_VAL
-        [[ $ESP == "$ROOTP" ]] && fail "The EFI partition and the Grim Void partition must be different."
-        if [[ $(lsblk -no FSTYPE "$ESP") == vfat ]]; then FORMAT_ESP=no; note "The EFI partition is kept as it is (other systems stay bootable)."
-        else yesno "$ESP isn't FAT. Format it as an EFI partition?" || fail "An EFI partition is needed."; fi
+STEP_AT=0
+while ((STEP_AT < ${#STEPS[@]})); do
+    "${STEPS[$STEP_AT]}"; rc=$?
+    if ((rc == BACK)); then
+        if ((STEP_AT > 0)); then STEP_AT=$((STEP_AT - 1)); else note "This is the first step."; fi
+    else
+        STEP_AT=$((STEP_AT + 1))
     fi
-fi
-
-title "6. Kernel"
-choose "Which Linux kernel?" linux-grim "Linux Grim: ${GRIM_KERNEL_DESC[linux-grim]}" linux6.18 "Linux: ${GRIM_KERNEL_DESC[linux6.18]}"
-KERNEL=$REPLY_VAL
-
-title "7. Desktops"
-printf '%sWhich desktops? Type the numbers with spaces (like: 1 3), or 0 for none.%s\n' "$B" "$N"
-for i in "${!GRIM_DE_ORDER[@]}"; do de=${GRIM_DE_ORDER[$i]}; printf '  %s%d%s  %-8s %s\n' "$R" $((i + 1)) "$N" "${GRIM_DE_NAME[$de]}" "$G${GRIM_DE_DESC[$de]}$N"; done
-printf '  %s0%s  none (a console system; you can add one later with grimhelp)\n' "$R" "$N"
-while :; do
-    read -rp "> " picks
-    DESKTOPS=(); ok=1
-    for n in $picks; do
-        [[ $n == 0 ]] && continue
-        if [[ $n =~ ^[0-9]+$ ]] && ((n >= 1 && n <= ${#GRIM_DE_ORDER[@]})); then DESKTOPS+=("${GRIM_DE_ORDER[$((n - 1))]}"); else ok=0; fi
-    done
-    ((ok)) && [[ -n $picks ]] && break
-    echo "Type numbers from the list, like: 1 3"
 done
-DESKTOP=none
-if ((${#DESKTOPS[@]} == 1)); then DESKTOP=${DESKTOPS[0]}
-elif ((${#DESKTOPS[@]} > 1)); then
-    args=(); for de in "${DESKTOPS[@]}"; do args+=("$de" "${GRIM_DE_NAME[$de]}"); done
-    choose "Which one should start when you log in?" "${args[@]}" ask "Ask me every time"
-    DESKTOP=$REPLY_VAL
-fi
 
-title "8. Extras"
-AUTOUPD=daily
-choose "Update automatically?" daily "Yes, once a day (recommended)" weekly "Yes, once a week" off "No, I'll run 'grimctl update' myself"
-AUTOUPD=$REPLY_VAL
-choose "When Grim Void starts:" desktop "Start normally (desktop after login)" lowram "Low-RAM mode (console only, nothing else running)"
-BOOTMODE=$REPLY_VAL
+# ------------------------------------------------------------------ summary (change any step from here)
+while :; do
+    # hardware we can see -> extra packages
+    EXTRA=()
+    lspci 2>/dev/null | grep -qi 'vga.*nvidia\|3d.*nvidia' && EXTRA+=("${GRIM_NVIDIA[@]}")
+    ((${#DESKTOPS[@]})) && lspci 2>/dev/null | grep -qi 'vga.*intel' && EXTRA+=("${GRIM_INTEL_VIDEO[@]}")
+    ((${#DESKTOPS[@]})) && lspci 2>/dev/null | grep -qiE 'vga.*(amd|ati|radeon)' && EXTRA+=("${GRIM_AMD_VIDEO[@]}")
 
-# hardware we can see -> extra packages
-EXTRA=()
-lspci 2>/dev/null | grep -qi 'vga.*nvidia\|3d.*nvidia' && { EXTRA+=("${GRIM_NVIDIA[@]}"); note "NVIDIA graphics found: adding its firmware (nouveau driver)."; }
-((${#DESKTOPS[@]})) && lspci 2>/dev/null | grep -qi 'vga.*intel' && EXTRA+=("${GRIM_INTEL_VIDEO[@]}")
-((${#DESKTOPS[@]})) && lspci 2>/dev/null | grep -qiE 'vga.*(amd|ati|radeon)' && EXTRA+=("${GRIM_AMD_VIDEO[@]}")
-
-# ------------------------------------------------------------------ summary
-title "Ready to install"
-printf '  %-14s %s\n' "Install" "$MODE" "Disk" "$DISK ($([[ $PARTMODE == whole ]] && echo 'ERASED' || echo "partition $ROOTP"))" \
-    "Boot" "$([[ $UEFI == yes ]] && echo UEFI || echo BIOS), GRUB" "Kernel" "$KERNEL" \
-    "Desktops" "${DESKTOPS[*]:-none} (starts: $DESKTOP)" "Shell" "$SHELL_" "User" "$USERNAME_ @ $HOSTNAME_" \
-    "Keyboard" "$KEYMAP" "Time zone" "$TZONE" "Updates" "$AUTOUPD" "Starts in" "$BOOTMODE" \
-    "Filesystem" "ext4 (noatime), zram swap"
-echo
-if [[ $PARTMODE == whole ]]; then
-    printf '%sEVERYTHING on %s will be erased.%s\n' "$R" "$DISK" "$N"
-else
-    printf '%s%s will be erased.%s\n' "$R" "$ROOTP" "$N"
-fi
-# the full package list (shown in a dry run)
-PKGS=("${GRIM_BASE[@]}" "$KERNEL")
-[[ $KERNEL == linux6.18 ]] && PKGS+=(linux-base)
-if [[ $UEFI == yes ]]; then PKGS+=("${GRIM_BOOT_UEFI[@]}"); else PKGS+=("${GRIM_BOOT_BIOS[@]}"); fi
-((${#DESKTOPS[@]})) && PKGS+=("${GRIM_DESKTOP_COMMON[@]}")
-for de in "${DESKTOPS[@]}"; do read -ra p <<<"${GRIM_DE_PKGS[$de]}"; PKGS+=("${p[@]}"); done
-[[ -n ${GRIM_SHELL_PKG[$SHELL_]} ]] && PKGS+=("${GRIM_SHELL_PKG[$SHELL_]}")
-PKGS+=("${EXTRA[@]}")
-mapfile -t PKGS < <(printf '%s\n' "${PKGS[@]}" | awk 'NF && !s[$0]++')
-if [[ $DRY == yes ]]; then
-    printf '%sDry run:%s nothing was changed. It would install %d packages:\n' "$B" "$N" "${#PKGS[@]}"
-    printf '%s\n' "${PKGS[*]}" | fold -s -w 78 | sed 's/^/  /'
-    exit 0
-fi
-read -rp "Type 'install' to start, anything else to stop: " go
-[[ $go == install ]] || { echo "Stopped. Nothing was changed."; exit 0; }
+    title "Ready to install"
+    printf '  %s1%s %-12s %s\n' "$R" "$N" "Install" "$MODE"
+    printf '  %s2%s %-12s %s\n' "$R" "$N" "Keyboard" "$KEYMAP"
+    printf '  %s3%s %-12s %s\n' "$R" "$N" "Time zone" "$TZONE"
+    printf '  %s4%s %-12s %s\n' "$R" "$N" "User" "$USERNAME_ @ $HOSTNAME_, shell $SHELL_"
+    printf '  %s5%s %-12s %s\n' "$R" "$N" "Disk" "$DISK ($([[ $PARTMODE == whole ]] && echo 'ERASED' || echo "partition $ROOTP"))"
+    printf '  %s6%s %-12s %s\n' "$R" "$N" "Kernel" "$KERNEL"
+    printf '  %s7%s %-12s %s\n' "$R" "$N" "Desktops" "${DESKTOPS[*]:-none} (starts: $DESKTOP)"
+    printf '  %s8%s %-12s %s\n' "$R" "$N" "Extras" "updates $AUTOUPD, starts in $BOOTMODE"
+    printf '    %-12s %s\n' "Boot" "$([[ $UEFI == yes ]] && echo UEFI || echo BIOS), GRUB" "Filesystem" "ext4 (noatime), zram swap"
+    ((${#EXTRA[@]})) && printf '    %-12s %s\n' "Hardware" "adds ${EXTRA[*]}"
+    echo
+    if [[ $PARTMODE == whole ]]; then
+        printf '%sEVERYTHING on %s will be erased.%s\n' "$R" "$DISK" "$N"
+    else
+        printf '%s%s will be erased.%s\n' "$R" "$ROOTP" "$N"
+    fi
+    # the full package list (shown in a dry run)
+    PKGS=("${GRIM_BASE[@]}" "$KERNEL")
+    [[ $KERNEL == linux6.18 ]] && PKGS+=(linux-base)
+    if [[ $UEFI == yes ]]; then PKGS+=("${GRIM_BOOT_UEFI[@]}"); else PKGS+=("${GRIM_BOOT_BIOS[@]}"); fi
+    ((${#DESKTOPS[@]})) && PKGS+=("${GRIM_DESKTOP_COMMON[@]}")
+    for de in "${DESKTOPS[@]}"; do read -ra p <<<"${GRIM_DE_PKGS[$de]}"; PKGS+=("${p[@]}"); done
+    [[ -n ${GRIM_SHELL_PKG[$SHELL_]} ]] && PKGS+=("${GRIM_SHELL_PKG[$SHELL_]}")
+    PKGS+=("${EXTRA[@]}")
+    mapfile -t PKGS < <(printf '%s\n' "${PKGS[@]}" | awk 'NF && !s[$0]++')
+    if [[ $DRY == yes ]]; then
+        printf '%sDry run:%s nothing will be changed. It would install %d packages:\n' "$B" "$N" "${#PKGS[@]}"
+        printf '%s\n' "${PKGS[*]}" | fold -s -w 78 | sed 's/^/  /'
+    fi
+    read -rp "$(printf "Type %sinstall%s to start, a number (1-8) to change that step, anything else to stop: " "$B" "$N")" go || eof
+    if [[ $go =~ ^[1-8]$ ]]; then
+        "${STEPS[$((go - 1))]}"     # "b" in there just comes back here
+        continue
+    fi
+    [[ $go == install && $DRY == yes ]] && { echo "Dry run: that's where it would install. Nothing was changed."; exit 0; }
+    [[ $go == install ]] && break
+    echo "Stopped. Nothing was changed."; exit 0
+done
 
 # ------------------------------------------------------------------ disk
 title "Installing"

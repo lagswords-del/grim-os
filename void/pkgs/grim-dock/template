@@ -1,0 +1,16 @@
+# Template file for 'grim-dock'
+# Grim Void: a TUI to change IceWM's taskbar (modes: grim, dock, floating, minimal, top, win7,
+# stats, normal IceWM; or every setting by hand). build.sh copies extras/grim-dock into files/root.
+# Offered in grimhelp (Install apps > Grim apps).
+pkgname=grim-dock
+version=1.0.0
+revision=1
+depends="bash dialog icewm"
+short_desc="Grim Void: change how the IceWM taskbar looks, from a TUI"
+maintainer="Grim OS <grimos@localhost>"
+license="MIT"
+homepage="https://github.com/lagswords-del/grim-os"
+
+do_install() {
+	cp -a ${FILESDIR}/root/. ${DESTDIR}/
+}

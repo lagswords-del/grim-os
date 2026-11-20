@@ -1,0 +1,200 @@
+#!/bin/bash
+# grim-dock: change how IceWM's taskbar (the dock) looks, from a TUI.
+#   grim-dock               the menu
+#   grim-dock MODE          switch straight to a mode: grim dock floating minimal top win7 icewm
+#   grim-dock show          print the current settings
+# Settings live in ~/.icewm/grim-dock.conf; grim-dock writes them into ~/.icewm/prefoverride
+# (which IceWM reads after its theme) and restarts IceWM in place: windows stay open.
+set -uo pipefail
+ICE=${ICEWM_PRIVCFG:-$HOME/.icewm}
+CONF=$ICE/grim-dock.conf
+OVR=$ICE/prefoverride
+MARK="# grim-dock: everything below is written by grim-dock"
+export DIALOGRC=/usr/share/grim/dialogrc
+BT="grim-dock: the IceWM taskbar"
+d() { dialog --backtitle "$BT" "$@" 3>&1 1>&2 2>&3; }
+
+# ------------------------------------------------------------------ the settings
+# name|default|IceWM preference|what it is
+KEYS=(
+  "position|bottom|TaskBarAtTop|where the bar sits (bottom/top)"
+  "width|100|TaskBarWidthPercentage|width in % of the screen"
+  "align|left|TaskBarJustify|left, center or right (when narrower than the screen)"
+  "big|0|TaskBarDoubleHeight|double height (bigger icons)"
+  "autohide|0|TaskBarAutoHide|hide until the mouse touches the edge"
+  "titles|1|TaskBarShowWindowTitles|window titles next to the icons"
+  "icons|1|TaskBarShowWindowIcons|window icons"
+  "group|0|TaskBarTaskGrouping|group windows of the same app (0-3)"
+  "start|1|TaskBarShowStartMenu|start menu button"
+  "winlist|1|TaskBarShowWindowListMenu|window list button"
+  "desktopbtn|1|TaskBarShowShowDesktopButton|show-desktop button"
+  "workspaces|1|TaskBarShowWorkspaces|workspace buttons"
+  "clock|1|TaskBarShowClock|the clock"
+  "tray|1|TaskBarShowTray|the tray (Wi-Fi, volume icons)"
+  "cpu|0|TaskBarShowCPUStatus|CPU graph"
+  "ram|0|TaskBarShowMEMStatus|RAM graph"
+  "net|0|TaskBarShowNetStatus|network graph"
+  "battery|0|TaskBarShowAPMStatus|battery"
+  "mail|0|TaskBarShowMailboxStatus|mail icon"
+  "colour|black|ColorDefaultTaskBar|bar colour (black/grey/red/blood/glass)"
+  "original|0||use IceWM's own stock theme and taskbar"
+)
+declare -A V
+
+defaults() { local k; for k in "${KEYS[@]}"; do IFS='|' read -r n def _ _ <<<"$k"; V[$n]=$def; done; }
+load() {
+    defaults
+    [[ -f $CONF ]] || return 0
+    local n v
+    while IFS='=' read -r n v; do [[ -n $n && $n != \#* ]] && V[$n]=$v; done < "$CONF"
+}
+save() {
+    mkdir -p "$ICE"
+    { echo "# grim-dock settings (grim-dock writes this)"; local k n; for k in "${KEYS[@]}"; do n=${k%%|*}; echo "$n=${V[$n]}"; done; } > "$CONF"
+}
+
+colour_of() {
+    case $1 in
+        grey)  echo "rgb:2a/2a/2a" ;; red) echo "rgb:c1/12/1f" ;; blood) echo "rgb:3a/08/0c" ;;
+        glass) echo "rgb:16/16/16" ;; *) echo "rgb:0a/0a/0a" ;;
+    esac
+}
+
+# write ~/.icewm/prefoverride (keeping anything the user wrote above our marker)
+write_override() {
+    mkdir -p "$ICE"
+    local keep=""
+    [[ -f $OVR ]] && keep=$(sed "/^$MARK/,\$d" "$OVR")
+    {
+        [[ -n $keep ]] && printf '%s\n' "$keep"
+        echo "$MARK"
+        if [[ ${V[original]} == 1 ]]; then
+            echo 'Theme="default/default.theme"'
+            echo "# IceWM's own taskbar: nothing else changed"
+        else
+            echo "ShowAddressBar=0     # IceWM's command box (it fills double-height bars)"
+            local k n def pref
+            for k in "${KEYS[@]}"; do
+                IFS='|' read -r n def pref _ <<<"$k"
+                [[ -z $pref ]] && continue
+                case $n in
+                    position) echo "$pref=$([[ ${V[$n]} == top ]] && echo 1 || echo 0)" ;;
+                    align)    echo "$pref=\"${V[$n]}\"" ;;
+                    colour)   echo "$pref=\"$(colour_of "${V[$n]}")\""
+                              [[ ${V[$n]} == glass ]] && echo 'TaskBarKeepBelow=0' ;;
+                    *)        echo "$pref=${V[$n]}" ;;
+                esac
+            done
+        fi
+    } > "$OVR"
+}
+
+apply() {
+    save
+    write_override
+    if [[ -n ${DISPLAY:-} ]] && pgrep -x icewm >/dev/null; then
+        icesh restart >/dev/null 2>&1 || pkill -HUP -x icewm
+    fi
+}
+
+# ------------------------------------------------------------------ modes
+mode() {
+    defaults
+    case $1 in
+        grim)     ;;   # the defaults: Grim's full-width bar
+        dock)     V[width]=55; V[align]=center; V[big]=1; V[titles]=0; V[group]=1; V[winlist]=0; V[desktopbtn]=0
+                  V[workspaces]=0; V[clock]=1; V[colour]=grey ;;
+        floating) V[width]=50; V[align]=center; V[big]=1; V[titles]=0; V[group]=1; V[winlist]=0; V[desktopbtn]=0
+                  V[workspaces]=0; V[autohide]=1; V[colour]=grey ;;
+        minimal)  V[titles]=1; V[winlist]=0; V[desktopbtn]=0; V[start]=0; V[tray]=0; V[colour]=black ;;
+        top)      V[position]=top ;;
+        win7)     V[big]=1; V[titles]=0; V[group]=2; V[winlist]=0; V[desktopbtn]=2; V[colour]=glass ;;
+        stats)    V[cpu]=1; V[ram]=1; V[net]=1; V[battery]=1 ;;
+        icewm)    V[original]=1 ;;
+        *) echo "modes: grim dock floating minimal top win7 stats icewm"; return 1 ;;
+    esac
+    apply
+}
+
+preview() {   # a little picture of each mode
+    case $1 in
+        grim)     printf '│▌Menu│ 1 2 3 4 │ ▣ Terminal │ ▣ Browser │            │ ♪ ⌂ │ 12:00 │' ;;
+        dock)     printf '              ╭──────────────────────────╮\n              │ ▣  ▣  ▣  ▣  ▣    12:00   │\n              ╰──────────────────────────╯' ;;
+        floating) printf '                (hidden until the mouse touches the bottom)\n               ╭────────────────────────╮\n               │  ▣   ▣   ▣   ▣   ▣     │\n               ╰────────────────────────╯' ;;
+        minimal)  printf '│ 1 2 3 4 │ Terminal │ Browser │                           │ 12:00 │' ;;
+        top)      printf '│▌Menu│ 1 2 3 4 │ ▣ Terminal │ ...  (at the top of the screen) │ 12:00 │' ;;
+        win7)     printf '│ ◉ │ ▣ ▣ ▣ ▣ │                                 │ ♪ ⌂ │ 12:00 │▏\n│   │  (bigger, grouped icons, show-desktop strip at the end)   │' ;;
+        stats)    printf '│▌Menu│ 1 2 3 4 │ ▣ Terminal │  ▁▃▅ cpu ▂▄ ram ▁▁▃ net │ 87%% │ 12:00 │' ;;
+        icewm)    printf "IceWM's own taskbar and stock theme, as IceWM ships it" ;;
+    esac
+}
+
+modes_menu() {
+    local c
+    c=$(d --title "Dock modes" --cancel-label "Back" --menu "Pick a look. It changes straight away; your windows stay open." 18 70 9 \
+        grim "Grim: full-width bar (the default)" \
+        dock "Dock: a centred bar with big icons" \
+        floating "Floating: a centred dock that hides itself" \
+        minimal "Minimal: workspaces, windows and the clock" \
+        top "Top: the Grim bar at the top" \
+        win7 "Windows 7: big grouped icons and a show-desktop strip" \
+        stats "Stats: CPU, RAM, network and battery graphs" \
+        icewm "Normal IceWM: IceWM's own taskbar and theme") || return
+    d --title "$c" --yesno "$(preview "$c")\n\nUse this mode?" 12 76 || return
+    mode "$c"
+    d --msgbox "Done. If it looks wrong: grim-dock > Modes > Grim puts it back." 7 60
+}
+
+custom_menu() {
+    load
+    while :; do
+        local items=() k n def pref what val
+        for k in "${KEYS[@]}"; do
+            IFS='|' read -r n def pref what <<<"$k"
+            val=${V[$n]}
+            case $val in 1) val=on ;; 0) [[ $n == group ]] || val=off ;; esac
+            items+=("$n" "$(printf '%-12s %s' "$val" "$what")")
+        done
+        local c
+        c=$(d --title "Build your own" --cancel-label "Back" --extra-button --extra-label "Apply" --menu \
+            "Pick a setting to change it, then Apply." 26 78 19 "${items[@]}")
+        local rc=$?
+        if ((rc == 3)); then apply; d --msgbox "Applied." 5 20; continue; fi
+        ((rc == 0)) || return
+        case $c in
+            position) V[position]=$(d --menu "Where?" 10 40 2 bottom "" top "") || continue ;;
+            width)    V[width]=$(d --rangebox "Width (% of the screen)" 7 50 20 100 "${V[width]}") || continue ;;
+            align)    V[align]=$(d --menu "Line it up:" 11 40 3 left "" center "" right "") || continue ;;
+            group)    V[group]=$(d --menu "Group windows of the same app?" 12 60 4 0 "no" 1 "yes" 2 "yes, icons only" 3 "yes, with a count") || continue ;;
+            colour)   V[colour]=$(d --menu "Bar colour:" 13 50 5 black "Grim black" grey "dark grey" red "Grim red" blood "deep red" glass "Windows 7 glass") || continue ;;
+            desktopbtn) V[desktopbtn]=$(d --menu "Show-desktop button:" 11 50 3 0 "off" 1 "a button" 2 "a strip at the end") || continue ;;
+            *)        if [[ ${V[$c]} == 1 ]]; then V[$c]=0; else V[$c]=1; fi ;;
+        esac
+    done
+}
+
+main_menu() {
+    local c
+    while :; do
+        load
+        c=$(d --title "grim-dock" --cancel-label "Exit" --menu "Change how IceWM's taskbar looks." 14 60 5 \
+            1 "Modes (ready-made looks)" \
+            2 "Build your own (every setting)" \
+            3 "Back to Grim's normal bar" \
+            4 "Back to IceWM's own taskbar") || { clear; return; }
+        case $c in
+            1) modes_menu ;;
+            2) custom_menu ;;
+            3) mode grim; d --msgbox "Grim's normal bar is back." 5 34 ;;
+            4) mode icewm; d --msgbox "IceWM's own taskbar is back. grim-dock > Modes > Grim returns to Grim's." 6 60 ;;
+        esac
+    done
+}
+
+command -v icewm >/dev/null || { echo "grim-dock is for IceWM, which isn't installed (grimctl install icewm)."; exit 1; }
+case ${1:-} in
+    "") main_menu ;;
+    show) load; for k in "${KEYS[@]}"; do n=${k%%|*}; printf '%-12s %s\n' "$n" "${V[$n]}"; done ;;
+    -h|--help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) mode "$1" ;;
+esac

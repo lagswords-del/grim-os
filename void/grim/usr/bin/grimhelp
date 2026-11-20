@@ -180,6 +180,11 @@ qs_now() {   # the current value of each quick setting, for the menu
              elif command -v makoctl >/dev/null && pgrep -x mako >/dev/null; then makoctl mode | grep -q do-not-disturb && echo on || echo off
              else echo off; fi ;;
         night) pgrep -x gammastep >/dev/null && echo on || echo off ;;
+        mic) wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | grep -q MUTED && echo muted || echo on ;;
+        out) wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null | sed -n 's/.*node.description = "\(.*\)"/\1/p' | head -1 ;;
+        browser) xdg-settings get default-web-browser 2>/dev/null | sed 's/\.desktop$//' ;;
+        shell) basename "$(getent passwd "$USER" | cut -d: -f7)" ;;
+        cpu) v=$(grimctl get cpu); echo "${v:-balanced}" ;;
         *) grimctl get "$1" ;;
     esac
 }
@@ -196,6 +201,9 @@ qs_menu() {
             dnd     "Do not disturb        $(qs_now dnd)"
             night   "Night light           $(qs_now night)"
             dns     "DNS                   $(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)"
+            mic     "Microphone            $(qs_now mic)"
+            out     "Sound output          $(qs_now out)"
+            cpu     "Power mode            $(qs_now cpu)"
         )
         if [[ -n $bat ]]; then local lim; lim=$(qs_now battery_limit); items+=(battery "Battery charge limit  ${lim:+$lim%}${lim:-none}"); fi
         items+=(
@@ -205,10 +213,15 @@ qs_menu() {
             desktop "Desktop at login      $(qs_now desktop)"
             keymap  "Keyboard layout       $(qs_now keymap)"
             tz      "Time zone             $(qs_now timezone)"
+            browser "Default browser       $(qs_now browser)"
+            login   "Log in automatically  $(v=$(qs_now autologin); echo "${v:-off}")"
+            shell   "Your shell            $(qs_now shell)"
+            host    "Computer name         $(cat /etc/hostname 2>/dev/null)"
             wall    "Wallpaper"
             logo    "grimfetch logo"
+            dock    "Taskbar look (IceWM)"
         )
-        c=$(d --title "Quick settings" --cancel-label "Back" --no-tags --menu "Pick one to change it." 24 64 16 "${items[@]}") || return
+        c=$(d --title "Quick settings" --cancel-label "Back" --no-tags --menu "Pick one to change it." 30 66 24 "${items[@]}") || return
         case $c in
             wifi)  if [[ $(qs_now wifi) == on ]]; then nmcli radio wifi off; else nmcli radio wifi on; fi ;;
             bt)    if [[ $(qs_now bt) == "not set up" ]]; then
@@ -251,6 +264,39 @@ qs_menu() {
             tz)    local z2; z2=$(d --title "Time zone" --inputbox "Like Europe/London, America/New_York, Asia/Tokyo:" 9 60 "$(qs_now timezone)") || continue
                    [[ -f /usr/share/zoneinfo/$z2 ]] || { d --msgbox "No time zone called $z2." 6 50; continue; }
                    clear; sudo grimctl set timezone "$z2"; pause ;;
+            mic)   wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle ;;
+            out)   local -a sinks=(); local id name
+                   while read -r id name; do sinks+=("$id" "$name"); done < <(wpctl status 2>/dev/null |
+                       awk '/Sinks:/{f=1; next} f && /^ *│ *$|Sources:/{f=0} f' | sed -E 's/[│*]//g; s/\[vol:.*//' | awk 'NF {id=$1; sub(/\.$/, "", id); $1=""; sub(/^ /, ""); print id, $0}')
+                   ((${#sinks[@]})) || { d --msgbox "No sound outputs found (is PipeWire running?)." 6 54; continue; }
+                   id=$(d --title "Sound output" --menu "Where should sound play?" 16 70 8 "${sinks[@]}") || continue
+                   wpctl set-default "$id" ;;
+            cpu)   local m; m=$(d --title "Power mode" --default-item "$(qs_now cpu)" --menu "How hard should the CPU work?" 12 64 3 \
+                       performance "full speed (games, builds; more heat and battery use)" \
+                       balanced "speeds up when needed (default)" \
+                       powersave "slow and cool (longest battery)") || continue
+                   clear; sudo grimctl set cpu "$m"; pause ;;
+            browser) local -a bs=(); local f
+                   for f in grim-browser firefox chromium org.chromium.Chromium com.brave.Browser qutebrowser io.gitlab.librewolf-community; do
+                       ls /usr/share/applications/$f.desktop /var/lib/flatpak/exports/share/applications/$f.desktop 2>/dev/null | grep -q . && bs+=("$f" "")
+                   done
+                   ((${#bs[@]})) || { d --msgbox "No browsers found." 6 40; continue; }
+                   f=$(d --title "Default browser" --menu "Links open in:" 14 60 7 "${bs[@]}") || continue
+                   xdg-settings set default-web-browser "$f.desktop" 2>/dev/null; xdg-mime default "$f.desktop" x-scheme-handler/http x-scheme-handler/https text/html ;;
+            login) local l; l=$(d --title "Log in automatically" --menu "Skip the password on tty1? (Anyone at the PC gets in: only for a PC at home.)" 12 66 2 \
+                       "$USER" "yes, log $USER in automatically" off "no, ask for the password") || continue
+                   clear; sudo grimctl set autologin "$l"; pause ;;
+            shell) local -a sh=(); local x
+                   for x in bash fish zsh dash; do command -v $x >/dev/null && sh+=("$(command -v $x)" "$x"); done
+                   x=$(d --title "Your shell" --menu "The shell your terminals and logins use:" 13 50 4 "${sh[@]}") || continue
+                   clear; sudo chsh -s "$x" "$USER" && echo "Your shell is now $(basename "$x") (from your next login)."; pause ;;
+            host)  local h; h=$(d --title "Computer name" --inputbox "Letters, numbers and - only:" 8 50 "$(cat /etc/hostname 2>/dev/null)") || continue
+                   [[ $h =~ ^[a-zA-Z0-9-]{1,63}$ ]] || { d --msgbox "Letters, numbers and - only." 6 40; continue; }
+                   clear; sudo grimctl set hostname "$h"; pause ;;
+            dock)  if command -v grim-dock >/dev/null; then grim-dock
+                   elif d --yesno "The taskbar is changed with grim-dock, which isn't installed yet.\n\nInstall it now?" 9 60; then
+                       clear; sudo env GRIM_HELP=1 grimctl install grim-dock && grim-dock
+                   fi ;;
             wall)  wallpaper_menu ;;
             logo)  fetch_menu ;;
         esac

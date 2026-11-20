@@ -1,0 +1,17 @@
+grim-tube (YouTube in the terminal)
+===================================
+Install it from grimhelp > Install apps > Grim apps. No account, no ads, no cookies.
+
+  grim-tube                  search, or paste a link to a video or playlist
+  grim-tube lofi beats       search straight away
+  grim-tube https://youtu.be/…        open a link (videos, playlists, channels, YouTube Music)
+  grim-tube --play LINK      play now            grim-tube --audio LINK   sound only
+  grim-tube --tor …          through Tor (start Grim Browser first)
+  grim-tube --quality 720    lower video quality (default 1080)
+
+In a list: a number picks a video · n/p next/previous page · a 1 3 5 adds to the queue ·
+q plays the queue · s new search · x quit.
+For a video: play, sound only, download the video or the sound, details (with the thumbnail),
+copy the link, more from the channel, add to the queue.
+Downloads: ~/Videos/grim-tube and ~/Music/grim-tube.
+In the player: space pause, arrows seek, f fullscreen, 9/0 volume, q close.

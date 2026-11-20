@@ -70,8 +70,8 @@ stage_pkgs() {
     fi
     cd "$VP"
     local p force
-    for p in linux-grim grimfetch grim-tools grim-base dwm-grim spotify-player-grim grim-shot grim-ai grim-browser; do
-        force=; [[ $p == grim-tools || $p == grimfetch || $p == grim-base || $p == grim-shot || $p == grim-ai || $p == dwm-grim || $p == grim-browser ]] && force=-f
+    for p in linux-grim grimfetch grim-tools grim-base dwm-grim spotify-player-grim grim-shot grim-ai grim-browser grim-tube grim-dock; do
+        force=; [[ $p == grim-tools || $p == grimfetch || $p == grim-base || $p == grim-shot || $p == grim-ai || $p == dwm-grim || $p == grim-browser || $p == grim-tube || $p == grim-dock ]] && force=-f
         if [[ -z $force ]] && ls "$BIN/$p-"[0-9]*."$ARCH.xbps" >/dev/null 2>&1; then say "$p: already built"; continue; fi
         say "Building $p"
         ./xbps-src -A "$ARCH" -m "$MD" $force pkg "$p"

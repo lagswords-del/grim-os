@@ -26,3 +26,4 @@ KeySysMenu="Super+space"
 # Super + left drag moves a window, Super + right drag resizes it (from anywhere in the window)
 MouseWinMove="Super+Pointer_Button1"
 MouseWinSize="Super+Pointer_Button3"
+ShowAddressBar=0

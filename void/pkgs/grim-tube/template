@@ -1,0 +1,15 @@
+# Template file for 'grim-tube'
+# Grim Void's YouTube TUI: search or paste links, play (mpv), sound only, download, queue.
+# build.sh copies extras/grim-tube into files/root. Offered in grimhelp (Install apps > Grim apps).
+pkgname=grim-tube
+version=1.0.0
+revision=1
+depends="python3 yt-dlp mpv chafa ffmpeg curl"
+short_desc="Grim Void: YouTube in the terminal (search, links, play, download, no account)"
+maintainer="Grim OS <grimos@localhost>"
+license="MIT"
+homepage="https://github.com/lagswords-del/grim-os"
+
+do_install() {
+	cp -a ${FILESDIR}/root/. ${DESTDIR}/
+}

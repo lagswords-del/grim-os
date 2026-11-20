@@ -196,6 +196,25 @@ cmd_apply() {
     esac
     v=$(get battery_limit)
     for b in /sys/class/power_supply/BAT*/charge_control_end_threshold; do [[ -n $v && -w $b ]] && echo "$v" > "$b"; done
+    # CPU power mode: performance | balanced | powersave
+    v=$(get cpu)
+    if [[ -n $v ]]; then
+        local gov
+        case $v in performance) gov=performance ;; powersave) gov=powersave ;; *) gov=schedutil ;; esac
+        for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+            [[ -w $g ]] || continue
+            grep -qw "$gov" "${g%/*}/scaling_available_governors" 2>/dev/null || { [[ $gov == schedutil ]] && gov=ondemand; }
+            echo "$gov" > "$g" 2>/dev/null
+        done
+    fi
+    # log in automatically on tty1: a user name, or off
+    v=$(get autologin)
+    if [[ -n $v && -f /etc/sv/agetty-tty1/conf ]]; then
+        if [[ $v == off ]]; then sed -i -E 's/^GETTY_ARGS="--noclear -a [^"]*"/GETTY_ARGS="--noclear"/' /etc/sv/agetty-tty1/conf
+        elif id "$v" >/dev/null 2>&1; then
+            sed -i -E "s/^GETTY_ARGS=\"--noclear( -a [^\"]*)?\"/GETTY_ARGS=\"--noclear -a $v\"/" /etc/sv/agetty-tty1/conf
+        fi
+    fi
     v=$(get boot)
     case $v in lowram) cmd_boot lowram >/dev/null ;; desktop) cmd_boot desktop >/dev/null ;; esac
     [[ $quiet == -q ]] || say "System matches $CONF"
@@ -208,7 +227,7 @@ cmd_install() {
     local p
     for p; do
         case $p in
-            grim-shot|grim-ai|grim-browser)
+            grim-shot|grim-ai|grim-browser|grim-tube|grim-dock)
                 [[ ${GRIM_HELP:-} == 1 ]] || die "$p is installed from grimhelp: run grimhelp, then Install apps > Grim apps"
                 list_add packages "$p" ;;
             @flatpak:*|@src:*) list_add packages "$p" ;;
@@ -604,8 +623,8 @@ cmd_set() {
     need_root set "$@"
     [[ $# -eq 2 ]] || die "usage: grimctl set KEY VALUE   (like: grimctl set auto_update weekly)"
     case $1 in
-        hostname|timezone|keymap|desktop|boot|auto_update|zram|battery_limit) ;;
-        *) die "grimctl set knows: hostname timezone keymap desktop boot auto_update zram battery_limit" ;;
+        hostname|timezone|keymap|desktop|boot|auto_update|zram|battery_limit|cpu|autologin) ;;
+        *) die "grimctl set knows: hostname timezone keymap desktop boot auto_update zram battery_limit cpu autologin" ;;
     esac
     set_value "$1" "$2"
     cmd_apply -q

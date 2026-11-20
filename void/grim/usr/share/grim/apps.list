@@ -1,6 +1,8 @@
 # grimhelp's app list: category|name|what|kind:target
 #   kind: void = Void package, flatpak = Flathub app (for apps not built for musl), src = built on your PC
 Grim apps|Grim Browser|private Firefox: Tor private windows, no ads, no trackers, no telemetry|void:grim-browser
+Grim apps|grim-tube|YouTube in the terminal: search or paste links, play, download|void:grim-tube
+Grim apps|grim-dock|change how the IceWM taskbar looks: dock, floating, minimal, Windows 7…|void:grim-dock
 Grim apps|Grim Shot|screenshots and screen recording (Super+Shift+S)|void:grim-shot
 Grim apps|grim-ai|a local AI chat in the terminal with the Grim face|void:grim-ai
 Shells|fish|friendly shell with suggestions as you type|void:fish-shell
@@ -60,3 +62,79 @@ Desktop apps|Blueman|Bluetooth|void:blueman bluez
 Terminals|kitty|GPU terminal|void:kitty
 Terminals|foot|fast Wayland terminal|void:foot
 Terminals|st|suckless terminal|void:st
+Making media|Audacity|record and edit audio|void:audacity
+Making media|Kdenlive|video editor|void:kdenlive
+Making media|Shotcut|simple video editor|void:shotcut
+Making media|HandBrake|convert videos|flatpak:fr.handbrake.ghb
+Making media|Krita|digital painting|void:krita
+Making media|darktable|photo editing (raw)|void:darktable
+Making media|Blender|3D|void:blender
+Making media|EasyEffects|sound effects and equaliser|void:easyeffects
+Making media|qpwgraph|connect audio apps and devices|void:qpwgraph
+Music and video|Strawberry|music library player|void:strawberry
+Music and video|Rhythmbox|music player|void:rhythmbox
+Music and video|Audacious|light music player|void:audacious
+Music and video|cmus|terminal music player|void:cmus
+Music and video|ncmpcpp + mpd|terminal music player with a music daemon|void:ncmpcpp mpd
+Music and video|MusicBrainz Picard|tag your music|void:picard
+Music and video|FreeTube|YouTube app without ads or tracking|flatpak:io.freetubeapp.FreeTube
+Internet|Thunderbird|email|void:thunderbird
+Internet|qutebrowser|keyboard-driven browser|void:qutebrowser
+Internet|Tor Browser|the real Tor Browser|flatpak:org.torproject.torbrowser-launcher
+Internet|Vesktop|Discord with Vencord|flatpak:dev.vencord.Vesktop
+Internet|Slack|work chat|flatpak:com.slack.Slack
+Internet|Zoom|video calls|flatpak:us.zoom.Zoom
+Internet|Mumble|voice chat|void:mumble
+Internet|HexChat|IRC|void:hexchat
+Internet|WeeChat|IRC in the terminal|void:weechat
+Internet|Newsboat|RSS feeds in the terminal|void:newsboat
+Internet|NeoMutt|email in the terminal|void:neomutt
+Internet|w3m|web browser in the terminal|void:w3m
+Internet|FileZilla|FTP and SFTP|void:filezilla
+Internet|Remmina|remote desktop|void:remmina
+Internet|LocalSend|send files to phones on your Wi-Fi|flatpak:org.localsend.localsend_app
+Internet|KDE Connect|phone and PC together|void:kdeconnect
+Internet|aria2|fast downloads in the terminal|void:aria2
+Games|RetroArch|every retro console|void:retroarch
+Games|Dolphin|GameCube and Wii|void:dolphin-emu
+Games|PPSSPP|PSP|void:ppsspp
+Games|mGBA|Game Boy Advance|void:mgba
+Games|Heroic|Epic and GOG games|flatpak:com.heroicgameslauncher.hgl
+Files and backup|Syncthing|sync folders between your devices|void:syncthing
+Files and backup|Nextcloud|Nextcloud sync|void:nextcloud-client
+Files and backup|rclone|sync to any cloud|void:rclone
+Files and backup|restic|encrypted backups|void:restic
+Files and backup|BorgBackup|deduplicated backups|void:borg
+Files and backup|Timeshift|system snapshots|void:timeshift
+Files and backup|BleachBit|clean up junk files|void:bleachbit
+Files and backup|croc|send files between computers|void:croc
+Office and study|Okular|PDF and document reader|void:okular
+Office and study|Xournal++|handwritten notes and PDF notes|void:xournalpp
+Office and study|Foliate|e-book reader|void:foliate
+Office and study|Calibre|e-book library|void:calibre
+Office and study|Anki|flashcards|void:anki
+Office and study|GnuCash|money and accounts|void:gnucash
+Office and study|Qalculate!|a powerful calculator|void:qalculate-gtk
+Office and study|calcurse|calendar and todo in the terminal|void:calcurse
+Office and study|Taskwarrior|todo list in the terminal|void:task
+Office and study|OnlyOffice|office suite that opens Microsoft files well|flatpak:org.onlyoffice.desktopeditors
+Coding|VSCodium|VS Code without Microsoft's tracking|flatpak:com.vscodium.codium
+Coding|Helix|modal editor, works out of the box|void:helix
+Coding|micro|easy terminal editor|void:micro
+Coding|Emacs|editor|void:emacs-gtk3
+Coding|GitHub CLI|gh: GitHub from the terminal|void:github-cli
+Coding|Docker|containers|void:docker
+Coding|QEMU + virt-manager|virtual machines|void:qemu virt-manager
+Coding|jq|JSON in the terminal|void:jq
+Coding|hyperfine|benchmark commands|void:hyperfine
+Terminal tools|glow|read Markdown in the terminal|void:glow
+Terminal tools|ncdu|what's using disk space|void:ncdu
+Terminal tools|duf|disk usage, nicely|void:duf
+Terminal tools|dust|folder sizes as a tree|void:dust
+Terminal tools|fd|fast file finder|void:fd
+Terminal tools|procs|a better ps|void:procs
+Terminal tools|bottom|system monitor (btm)|void:bottom
+Terminal tools|gping|ping with a graph|void:gping
+Terminal tools|trippy|traceroute with a live view|void:trippy
+Terminal tools|Wireshark|see network traffic|void:wireshark
+Terminal tools|Flatseal|change Flatpak app permissions|flatpak:com.github.tchx84.Flatseal

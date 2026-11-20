@@ -1,0 +1,333 @@
+#!/usr/bin/env python3
+"""grim-tube: YouTube in the terminal. Search, or paste a link to a video or a playlist.
+
+  grim-tube                 search or paste a link
+  grim-tube WORDS           search straight away
+  grim-tube LINK            a video or playlist link (youtube.com, youtu.be, music.youtube.com...)
+  grim-tube --play LINK     play it right away            grim-tube --audio LINK   just the sound
+  grim-tube --tor ...       everything through Tor (needs Grim Browser's Tor, port 9150)
+  grim-tube --quality 720   highest video height to play/download (default 1080)
+
+In a list:   NUMBER  pick a video        n / p  next / previous page      s  new search
+             a NUMBERS add to the queue (a 1 3 5)   q  play the queue    x  quit
+For a video: 1 play  2 play sound only  3 download video  4 download sound  5 details
+             6 copy link  7 related (from the channel)  8 add to queue  b back
+
+Nothing is signed in and no cookies are kept: YouTube only sees an anonymous viewer.
+Downloads go to ~/Videos/grim-tube and ~/Music/grim-tube.
+"""
+import json, os, re, shutil, subprocess, sys, tempfile, textwrap, urllib.request
+
+R, B, G, Y, N = "\033[31m", "\033[1;97m", "\033[90m", "\033[33m", "\033[0m"
+TOR = False
+QUALITY = 1080
+PAGE = 12
+QUEUE = []
+VIDEOS = os.path.expanduser("~/Videos/grim-tube")
+MUSIC = os.path.expanduser("~/Music/grim-tube")
+
+
+def need(*progs):
+    missing = [p for p in progs if not shutil.which(p)]
+    if missing:
+        sys.exit(f"grim-tube needs {' '.join(missing)}: sudo grimctl install {' '.join(missing)}")
+
+
+def ytdlp(*args):
+    cmd = ["yt-dlp", "--no-warnings", "--no-cookies"]
+    if TOR:
+        cmd += ["--proxy", "socks5://127.0.0.1:9150"]
+    out = subprocess.run(cmd + list(args), capture_output=True, text=True)
+    if out.returncode and not out.stdout:
+        err = (out.stderr.strip().splitlines() or ["yt-dlp failed"])[-1]
+        raise RuntimeError(err.replace("ERROR: ", ""))
+    return out.stdout
+
+
+def is_link(s):
+    return bool(re.match(r"^(https?://|www\.|youtu\.be/|youtube\.com/|music\.youtube\.com/)", s.strip()))
+
+
+def norm_link(s):
+    s = s.strip()
+    return s if s.startswith("http") else "https://" + s
+
+
+def dur(sec):
+    if not sec:
+        return "live" if sec == 0 else ""
+    sec = int(sec)
+    h, m, s = sec // 3600, sec % 3600 // 60, sec % 60
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def views(n):
+    if not n:
+        return ""
+    for unit, size in (("B", 1e9), ("M", 1e6), ("K", 1e3)):
+        if n >= size:
+            return f"{n / size:.1f}{unit} views".replace(".0", "")
+    return f"{n} views"
+
+
+def video_url(e):
+    u = e.get("webpage_url") or e.get("url") or ""
+    if not u.startswith("http") and e.get("id"):
+        u = "https://www.youtube.com/watch?v=" + e["id"]
+    return u
+
+
+# ------------------------------------------------------------------ fetching
+def search(query, count):
+    data = json.loads(ytdlp("--flat-playlist", "-J", f"ytsearch{count}:{query}") or "{}")
+    return [e for e in data.get("entries", []) if e]
+
+
+def resolve(link):
+    """A link can be a video or a playlist/channel: return ("video", info) or ("list", title, entries)."""
+    data = json.loads(ytdlp("--flat-playlist", "-J", link) or "{}")
+    if data.get("_type") == "playlist" or data.get("entries") is not None:
+        return ("list", data.get("title") or "playlist", [e for e in data.get("entries", []) if e])
+    return ("video", data)
+
+
+def details(url):
+    return json.loads(ytdlp("-J", "--no-playlist", url) or "{}")
+
+
+# ------------------------------------------------------------------ actions
+def mpv(urls, audio=False):
+    need("mpv")
+    fmt = f"bestvideo[height<={QUALITY}]+bestaudio/best[height<={QUALITY}]/best"
+    cmd = ["mpv", "--force-window=" + ("no" if audio else "immediate"), f"--ytdl-format={fmt}",
+           "--script-opts=ytdl_hook-ytdl_path=yt-dlp"]
+    raw = ["no-cookies="]
+    if TOR:
+        raw.append("proxy=socks5://127.0.0.1:9150")
+    cmd.append("--ytdl-raw-options=" + ",".join(raw))
+    if audio:
+        cmd += ["--no-video", "--term-osd-bar"]
+        print(f"{G}Playing the sound only. Space pause · ←/→ seek 5s · ↑/↓ seek 1 min · 9/0 volume · > next · q stop{N}")
+        subprocess.run(cmd + urls)
+    else:
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            print(f"{Y}No desktop is running, so it plays the sound only.{N}")
+            return mpv(urls, audio=True)
+        subprocess.Popen(cmd + urls, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        print(f"{G}Playing in a window. In it: space pause · ←/→ seek · f fullscreen · q close{N}")
+
+
+def download(url, audio=False):
+    folder = MUSIC if audio else VIDEOS
+    os.makedirs(folder, exist_ok=True)
+    args = ["-o", os.path.join(folder, "%(title)s [%(id)s].%(ext)s"), "--no-playlist", "--embed-metadata"]
+    if audio:
+        args += ["-x", "--audio-format", "opus", "--embed-thumbnail"]
+    else:
+        args += ["-f", f"bestvideo[height<={QUALITY}]+bestaudio/best[height<={QUALITY}]", "--merge-output-format", "mkv"]
+    cmd = ["yt-dlp", "--no-cookies"] + (["--proxy", "socks5://127.0.0.1:9150"] if TOR else []) + args + [url]
+    print(f"{G}Downloading to {folder}…{N}")
+    subprocess.run(cmd)
+
+
+def copy(text):
+    for cmd in (["wl-copy"], ["xclip", "-selection", "clipboard"]):
+        if shutil.which(cmd[0]):
+            subprocess.run(cmd, input=text, text=True)
+            print(f"{G}Copied: {text}{N}")
+            return
+    print(text)
+
+
+def thumbnail(url):
+    if not shutil.which("chafa") or not url:
+        return
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        if TOR:   # urllib has no SOCKS: use curl
+            data = subprocess.run(["curl", "-fsSL", "--socks5-hostname", "127.0.0.1:9150", url], capture_output=True).stdout
+        else:
+            data = urllib.request.urlopen(req, timeout=15).read()
+        with tempfile.NamedTemporaryFile(suffix=".jpg") as f:
+            f.write(data); f.flush()
+            cols = min(64, shutil.get_terminal_size().columns - 4)
+            subprocess.run(["chafa", "--size", f"{cols}x{cols // 3}", f.name])
+    except Exception:
+        pass
+
+
+def show_details(url):
+    print(f"{G}Getting the details…{N}")
+    try:
+        d = details(url)
+    except Exception as e:
+        print(f"{R}Couldn't get them: {e}{N}"); return
+    thumbnail(d.get("thumbnail"))
+    print(f"\n  {B}{d.get('title', '')}{N}")
+    print(f"  {R}{d.get('channel') or d.get('uploader', '')}{N}  {G}{dur(d.get('duration'))} · {views(d.get('view_count'))}"
+          f" · {d.get('upload_date', '')[:4]}-{d.get('upload_date', '')[4:6]}-{d.get('upload_date', '')[6:8]}{N}")
+    desc = (d.get("description") or "").strip()
+    if desc:
+        w = shutil.get_terminal_size().columns - 4
+        for line in desc.splitlines()[:14]:
+            for part in textwrap.wrap(line, w) or [""]:
+                print("  " + part)
+        if len(desc.splitlines()) > 14:
+            print(f"  {G}…{N}")
+    print()
+
+
+# ------------------------------------------------------------------ menus
+def ask(prompt):
+    try:
+        return input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return "x"
+
+
+def video_menu(e):
+    url = video_url(e)
+    title = e.get("title") or url
+    while True:
+        print(f"\n  {B}{title}{N}  {G}{e.get('channel') or e.get('uploader') or ''} {dur(e.get('duration'))}{N}")
+        print(f"  {R}1{N} play   {R}2{N} sound only   {R}3{N} download video   {R}4{N} download sound   {R}5{N} details")
+        print(f"  {R}6{N} copy link   {R}7{N} more from this channel   {R}8{N} add to queue   {R}b{N} back")
+        a = ask("> ")
+        if a in ("b", "", "x"):
+            return a == "x"
+        if a == "1": mpv([url])
+        elif a == "2": mpv([url], audio=True)
+        elif a == "3": download(url)
+        elif a == "4": download(url, audio=True)
+        elif a == "5": show_details(url)
+        elif a == "6": copy(url)
+        elif a == "7":
+            ch = e.get("channel_url") or e.get("uploader_url")
+            if not ch:
+                try:
+                    d = details(url); ch = d.get("channel_url") or d.get("uploader_url")
+                except Exception:
+                    ch = None
+            if ch:
+                try:
+                    kind, *rest = resolve(ch.rstrip("/") + "/videos")
+                    if kind == "list" and list_menu(rest[0], rest[1]):
+                        return True
+                except Exception as err:
+                    print(f"{R}{err}{N}")
+            else:
+                print("No channel found for this video.")
+        elif a == "8":
+            QUEUE.append((title, url)); print(f"{G}Added. Queue: {len(QUEUE)}{N}")
+
+
+def list_menu(heading, entries, more=None):
+    """entries: list of dicts. more(n) fetches a longer list for paging (searches)."""
+    page = 0
+    while True:
+        if more and (page + 1) * PAGE > len(entries):
+            print(f"{G}Getting more…{N}")
+            try:
+                entries = more((page + 2) * PAGE)
+            except Exception as err:
+                print(f"{R}{err}{N}")
+        shown = entries[page * PAGE:(page + 1) * PAGE]
+        cols = shutil.get_terminal_size().columns
+        print(f"\n  {B}{heading}{N}  {G}page {page + 1}{N}" + (f"  {Y}queue: {len(QUEUE)}{N}" if QUEUE else ""))
+        if not shown:
+            print("  nothing here")
+        for i, e in enumerate(shown, page * PAGE + 1):
+            meta = " · ".join(x for x in (e.get("channel") or e.get("uploader") or "", dur(e.get("duration")),
+                                           views(e.get("view_count"))) if x)
+            print(f"  {R}{i:3d}{N}  {(e.get('title') or '')[:cols - 8]}")
+            print(f"       {G}{meta[:cols - 8]}{N}")
+        a = ask(f"{R}number{N} pick · {R}n{N}/{R}p{N} page · {R}a 1 3{N} queue · {R}q{N} play queue · {R}s{N} search · {R}x{N} quit > ")
+        if a == "x":
+            return True
+        if a in ("s", ""):
+            return False
+        if a == "n":
+            page += 1
+        elif a == "p":
+            page = max(0, page - 1)
+        elif a == "q":
+            play_queue()
+        elif a.startswith("a "):
+            for n in a[2:].split():
+                if n.isdigit() and 1 <= int(n) <= len(entries):
+                    e = entries[int(n) - 1]; QUEUE.append((e.get("title") or "", video_url(e)))
+            print(f"{G}Queue: {len(QUEUE)}{N}")
+        elif a.isdigit() and 1 <= int(a) <= len(entries):
+            if video_menu(entries[int(a) - 1]):
+                return True
+        else:
+            print("Type a number from the list, or one of the letters.")
+
+
+def play_queue():
+    if not QUEUE:
+        print("The queue is empty: add videos with a NUMBERS (like a 1 3 5)."); return
+    for i, (t, _) in enumerate(QUEUE, 1):
+        print(f"  {R}{i}{N}  {t}")
+    a = ask(f"{R}1{N} play the videos  {R}2{N} sound only  {R}c{N} clear the queue  {R}b{N} back > ")
+    if a == "1": mpv([u for _, u in QUEUE])
+    elif a == "2": mpv([u for _, u in QUEUE], audio=True)
+    elif a == "c": QUEUE.clear(); print("Cleared.")
+
+
+def open_thing(text):
+    """Search words or a link -> the right menu. Returns True to quit."""
+    if is_link(text):
+        link = norm_link(text)
+        print(f"{G}Opening the link…{N}")
+        try:
+            kind, *rest = resolve(link)
+        except Exception as e:
+            print(f"{R}Couldn't open it: {e}{N}"); return False
+        if kind == "video":
+            return video_menu(rest[0])
+        return list_menu(rest[0], rest[1])
+    print(f"{G}Searching YouTube{' through Tor' if TOR else ''}…{N}")
+    try:
+        found = search(text, PAGE)
+    except Exception as e:
+        print(f"{R}Couldn't search: {e}{N}"); return False
+    return list_menu(f"“{text}”", found, more=lambda n: search(text, n))
+
+
+def main(argv):
+    global TOR, QUALITY
+    need("yt-dlp")
+    words, mode = [], None
+    it = iter(argv)
+    for a in it:
+        if a in ("-h", "--help"):
+            print(__doc__.strip()); return
+        elif a == "--tor":
+            TOR = True
+        elif a == "--quality":
+            QUALITY = int(next(it, "1080"))
+        elif a in ("--play", "--audio"):
+            mode = a
+        else:
+            words.append(a)
+    text = " ".join(words)
+    if mode:
+        if not is_link(text):
+            sys.exit("--play and --audio need a link")
+        mpv([norm_link(text)], audio=(mode == "--audio"))
+        return
+    print(f"\n  {R}grim-tube{N}  {G}YouTube without an account, ads or cookies{' · through Tor' if TOR else ''}{N}")
+    while True:
+        if not text:
+            text = ask(f"\n{B}Search, or paste a link:{N} ")
+            if text in ("x", "q", ""):
+                return
+        if open_thing(text):
+            return
+        text = ""
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

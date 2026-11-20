@@ -1,0 +1,22 @@
+grim-dock (the IceWM taskbar)
+=============================
+Install it from grimhelp > Install apps > Grim apps (or Quick settings > Taskbar look).
+
+  grim-dock              the menu: modes, build your own, back to Grim's bar or IceWM's own
+  grim-dock dock         switch straight to a mode
+  grim-dock show         the current settings
+
+Modes:
+  grim       Grim's full-width bar (the default)
+  dock       a centred bar with big icons, no titles
+  floating   a centred dock that hides until the mouse touches the bottom
+  minimal    workspaces, windows and the clock
+  top        the Grim bar at the top
+  win7       big grouped icons and a show-desktop strip
+  stats      CPU, RAM, network and battery graphs
+  icewm      IceWM's own taskbar and stock theme
+
+Build your own: position, width, alignment, size, auto-hide, titles, icons, grouping, start
+button, window list, show-desktop button, workspaces, clock, tray, graphs, battery, colour.
+It writes ~/.icewm/prefoverride (lines you add above grim-dock's are kept) and restarts IceWM
+in place, so your windows stay open.

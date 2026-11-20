@@ -21,4 +21,8 @@ fi
 # also at boot: the battery charge limit from "battery_limit =" (grimctl battery limit N)
 lim=$(grimctl get battery_limit 2>/dev/null)
 for b in /sys/class/power_supply/BAT*/charge_control_end_threshold; do [ -n "$lim" ] && [ -w "$b" ] && echo "$lim" > "$b"; done
+# and the CPU power mode ("cpu =" performance, balanced or powersave)
+cpu=$(grimctl get cpu 2>/dev/null)
+case $cpu in performance) gov=performance ;; powersave) gov=powersave ;; balanced) gov=schedutil ;; *) gov= ;; esac
+[ -n "$gov" ] && for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo "$gov" > "$g" 2>/dev/null; done
 exec sleep infinity
