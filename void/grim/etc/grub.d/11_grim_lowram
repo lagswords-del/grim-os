@@ -1,0 +1,34 @@
+#! /bin/sh
+# Grim Void: adds a "Low RAM, no desktop" entry for every kernel in /boot.
+# "lowram" on the kernel line makes runit start the lowram runlevel: a console only.
+set -e
+prefix="/usr"; exec_prefix="/usr"; datarootdir="/usr/share"
+. "${pkgdatadir:-/usr/share/grub}/grub-mkconfig_lib"
+
+if [ "x${GRUB_DEVICE_UUID}" = "x" ] || [ "x${GRUB_DISABLE_LINUX_UUID}" = "xtrue" ]; then
+  root="root=${GRUB_DEVICE}"
+else
+  root="root=UUID=${GRUB_DEVICE_UUID}"
+fi
+bootdev="$(${grub_probe:-grub-probe} --target=device /boot)"
+access="$(prepare_grub_to_access_device "$bootdev" | sed 's/^/\t/')"
+
+for k in $(ls -1 /boot/vmlinuz-* 2>/dev/null | sort -rV); do
+  ver="${k#/boot/vmlinuz-}"
+  [ -f "/boot/initramfs-${ver}.img" ] || continue
+  rel="$(make_system_path_relative_to_its_root "$k")"
+  dir="${rel%/*}"
+  case "$ver" in *-grim) name="Linux Grim $ver" ;; *) name="Linux $ver" ;; esac
+  echo "Found Grim Void low-RAM entry: $k" >&2
+  cat <<ENTRY
+menuentry 'Grim Void - Low RAM, no desktop ($name)' --class grimvoid --class gnu-linux --class os {
+	load_video
+	set gfxpayload=keep
+	insmod gzio
+${access}
+	echo 'Loading $name in low-RAM mode...'
+	linux ${rel} ${root} rw ${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT} lowram
+	initrd ${dir}/initramfs-${ver}.img
+}
+ENTRY
+done

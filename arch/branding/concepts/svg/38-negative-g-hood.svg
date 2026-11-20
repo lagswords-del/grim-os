@@ -1,0 +1,2 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" color="#0a0a0a" style="--bg:#f2f2f2"><defs><mask id="ng"><rect width="200" height="200" fill="#fff"/><path d="M124 82 A30 30 0 1 0 128 112 H104" fill="none" stroke="#000" stroke-width="14"/></mask></defs>
+<path mask="url(#ng)" d="M100 18 C56 30 34 70 34 112 C34 146 46 168 56 182 H144 C154 168 166 146 166 112 C166 70 144 30 100 18 Z" fill="currentColor"/></svg>

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Grim DE Settings
+Comment=Themes, outlines, glass, wallpaper, bar, dock, displays, keybinds and more for the Grim desktop
+Exec=grim-de-settings
+Icon=/usr/share/grimos/logo.svg
+Categories=Settings;System;
+OnlyShowIn=Grim;

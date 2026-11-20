@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" color="#0a0a0a" style="--bg:#f2f2f2"><defs><mask id="wr"><rect width="200" height="200" fill="#fff"/><rect x="94" y="-20" width="12" height="240" fill="#000" transform="rotate(-45 100 100)"/></mask></defs>
+<g mask="url(#wr)" fill="none" stroke="currentColor">
+<circle cx="100" cy="100" r="80" stroke-width="12"/>
+<circle cx="100" cy="100" r="54" stroke-width="3"/><circle cx="100" cy="100" r="30" stroke-width="3"/>
+<line x1="100" y1="100" x2="100" y2="20" stroke-width="3" transform="rotate(0 100 100)"/><line x1="100" y1="100" x2="100" y2="20" stroke-width="3" transform="rotate(45 100 100)"/><line x1="100" y1="100" x2="100" y2="20" stroke-width="3" transform="rotate(90 100 100)"/><line x1="100" y1="100" x2="100" y2="20" stroke-width="3" transform="rotate(135 100 100)"/><line x1="100" y1="100" x2="100" y2="20" stroke-width="3" transform="rotate(180 100 100)"/><line x1="100" y1="100" x2="100" y2="20" stroke-width="3" transform="rotate(225 100 100)"/><line x1="100" y1="100" x2="100" y2="20" stroke-width="3" transform="rotate(270 100 100)"/><line x1="100" y1="100" x2="100" y2="20" stroke-width="3" transform="rotate(315 100 100)"/>
+</g></svg>

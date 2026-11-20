@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" color="#0a0a0a" style="--bg:#f2f2f2"><defs><mask id="sk"><rect width="200" height="200" fill="#fff"/><circle cx="62" cy="62" r="9" fill="#000"/><circle cx="86" cy="62" r="9" fill="#000"/><path d="M70 82 L74 76 L78 82 Z" fill="#000"/></mask></defs>
+<path mask="url(#sk)" d="M74 24 C48 24 36 42 36 62 C36 76 42 84 50 88 V100 H98 V88 C106 84 112 76 112 62 C112 42 100 24 74 24 Z" fill="currentColor"/>
+<rect x="66" y="98" width="16" height="84" fill="currentColor"/>
+<rect x="82" y="150" width="22" height="10" fill="currentColor"/><rect x="82" y="168" width="30" height="10" fill="currentColor"/></svg>

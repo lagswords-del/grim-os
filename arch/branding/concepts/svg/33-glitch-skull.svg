@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" color="#0a0a0a" style="--bg:#f2f2f2"><defs><mask id="gl"><rect width="200" height="200" fill="#fff"/><rect x="0" y="66" width="200" height="6" fill="#000"/><rect x="0" y="112" width="200" height="5" fill="#000"/><rect x="0" y="140" width="200" height="4" fill="#000"/><circle cx="78" cy="92" r="14" fill="#000"/><circle cx="122" cy="92" r="14" fill="#000"/><path d="M95 110 L100 102 L105 110 Z" fill="#000"/></mask></defs>
+<g mask="url(#gl)" fill="currentColor">
+<path d="M100 30 C62 30 42 58 42 90 C42 112 52 124 62 130 V160 C62 166 66 170 72 170 H128 C134 170 138 166 138 160 V130 C148 124 158 112 158 90 C158 58 138 30 100 30 Z"/>
+</g>
+<rect x="30" y="112" width="36" height="5" fill="currentColor"/><rect x="138" y="66" width="34" height="6" fill="currentColor"/><rect x="146" y="140" width="22" height="4" fill="currentColor"/></svg>

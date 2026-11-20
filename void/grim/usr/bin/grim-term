@@ -1,0 +1,8 @@
+#!/bin/sh
+# grim-term: the terminal for every Grim Void desktop. grim-term -e CMD runs CMD in it.
+for t in alacritty foot st xterm; do
+    command -v "$t" >/dev/null || continue
+    [ "$t" = foot ] && [ -z "$WAYLAND_DISPLAY" ] && continue
+    exec "$t" "$@"
+done
+echo "no terminal installed" >&2; exit 1

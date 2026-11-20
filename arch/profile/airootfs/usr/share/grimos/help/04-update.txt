@@ -1,0 +1,17 @@
+UPDATING GRIM OS
+
+  update        (or grimupdate)
+
+It updates, in order:
+  1. the Arch signing keys
+  2. every official package (sudo pacman -Syu)
+  3. AUR apps that grimhelp installed, if a newer version is out
+  4. Flatpak apps, if you use Flatpak
+
+  update --yes  answers yes to everything
+
+Reboot after an update that changes the kernel ("linux") so the
+new version is used. The update command tells you when.
+
+Grim OS is rolling: there are no big version upgrades, just
+regular updates. Update at least once a month.

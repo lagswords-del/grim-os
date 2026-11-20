@@ -1,0 +1,15 @@
+#!/bin/sh
+# Grim Void: runs "grimctl update --auto" when it's due ("auto_update =" daily or weekly).
+exec 2>&1
+while :; do
+    every=$(grimctl get auto_update 2>/dev/null)
+    case $every in weekly) gap=604800 ;; off|no) exec sv down grim-autoupdate ;; *) gap=86400 ;; esac
+    last=$(cat /var/lib/grim/last-update 2>/dev/null || echo 0)
+    now=$(date +%s)
+    if [ $((now - last)) -ge $gap ] && grim-wifi --check; then
+        echo "grim-autoupdate: updating"
+        nice -n 19 grimctl update --auto && echo "grim-autoupdate: done"
+        date +%s > /var/lib/grim/last-update
+    fi
+    sleep 3600
+done

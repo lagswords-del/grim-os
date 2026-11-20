@@ -1,0 +1,998 @@
+#!/usr/bin/env bash
+# griminstall: the Grim OS installer.
+#
+#   griminstall              walk through every setting, then install
+#   griminstall --load FILE  preset answers from a KEY=value file (for testing),
+#                            then jump to the summary screen
+#
+# Online mode downloads only the packages you pick. Offline mode installs from
+# the package repository bundled on the ISO (/opt/grimos/repo).
+
+set -uo pipefail
+
+LOG=/tmp/griminstall.log
+MNT=/mnt
+SHARE=/usr/share/grimos
+OFFLINE_REPO=/opt/grimos/repo
+OFFLINE_CONF=/etc/grimos/pacman-offline.conf
+OFFLINE_DB=/tmp/grimos-db          # our own copy of the USB repo's database, for package lookups
+BT="Grim OS installer"
+export DIALOGRC=$SHARE/dialogrc
+export NCURSES_NO_UTF8_ACS=1
+
+# shellcheck source=/usr/share/grimos/packages.sh
+source "$SHARE/packages.sh"
+
+# ---------------------------------------------------------------- settings
+MODE=""            # online | offline
+LOCALE="en_US.UTF-8"
+TIMEZONE="UTC"
+KEYMAP="us"
+XKB_LAYOUT="us"
+XKB_VARIANT=""
+HOSTNAME_="grimos"
+USERNAME_=""
+USERPASS=""
+ROOTPASS=""        # empty = root account locked, use sudo
+DISK=""
+PARTMODE="auto"    # auto | manual
+FS="ext4"          # ext4 | btrfs
+ROOT_PART=""; EFI_PART=""; SWAP_PART=""; FORMAT_EFI="yes"
+DESKTOPS=()        # keys from GRIM_DE_ORDER
+AUTODRIVERS="yes"
+NVIDIA="no"
+HAS_NVIDIA="no"
+DRIVER_PKGS=()
+DRIVER_REPORT=""
+BOOTLOADER="grub"  # grub | limine
+KERNEL="linux"     # linux | linux-zen | linux-lts | linux-grim
+PKGLIST="off"      # on = keep a NixOS-style package list in /etc/grimos/packages.conf
+PKGLIST_APPS=""    # apps typed in during setup, one per line ("name" or "name # aur")
+
+UEFI=no; [[ -d /sys/firmware/efi/efivars ]] && UEFI=yes
+# Where the EFI partition is mounted: GRUB keeps kernels on the root disk, Limine
+# can only read FAT, so with Limine the EFI partition *is* /boot.
+esp_mnt() { [[ $BOOTLOADER == limine ]] && echo /boot || echo /boot/efi; }
+
+# ---------------------------------------------------------------- helpers
+d() { dialog --backtitle "$BT" "$@" 3>&1 1>&2 2>&3; }
+msg() { dialog --backtitle "$BT" --title "${2:-Grim OS}" --msgbox "$1" 0 0; }
+ask() { dialog --backtitle "$BT" --title "${2:-Grim OS}" --yesno "$1" 0 0; }
+log() { printf '[%(%H:%M:%S)T] %s\n' -1 "$*" >>"$LOG"; }
+
+die() {
+    log "FATAL: $*"
+    local tail_; tail_=$(tail -n 15 "$LOG" 2>/dev/null)
+    dialog --backtitle "$BT" --title "Install failed" --msgbox \
+        "$*\n\nLast lines of $LOG:\n\n$tail_" 0 0
+    clear; echo "Install failed: $*  (full log: $LOG)"; exit 1
+}
+
+# Run a step on the plain terminal so the user sees pacman progress.
+step() {
+    local title=$1; shift
+    printf '\n\e[1;97m:: %s\e[0m\n' "$title"
+    log "STEP $title: $*"
+    "$@" 2>&1 | tee -a "$LOG"
+    local rc=${PIPESTATUS[0]}
+    ((rc == 0)) || die "$title failed (exit $rc)."
+}
+
+part() { [[ $1 =~ [0-9]$ ]] && echo "${1}p$2" || echo "${1}$2"; }
+
+online() { curl -fsS --max-time 6 -o /dev/null https://geo.mirror.pkgbuild.com/ 2>/dev/null; }
+
+has_offline_repo() { [[ -f $OFFLINE_REPO/grimos.db ]]; }
+
+join() { local out="" x; for x in "$@"; do out+="${out:+, }$x"; done; echo "$out"; }
+
+need_root() {
+    if ((EUID != 0)); then echo "griminstall must run as root."; exit 1; fi
+}
+
+# ---------------------------------------------------------------- network
+wifi_connect() {
+    local dev; dev=$(iw dev 2>/dev/null | awk '$1=="Interface"{print $2; exit}')
+    if [[ -z $dev ]]; then msg "No Wi-Fi adapter was found.\n\nPlug in a network cable, or turn on 'Find and install network drivers' and use offline mode." "Wi-Fi"; return 1; fi
+    dialog --backtitle "$BT" --infobox "Scanning for Wi-Fi networks on $dev..." 3 50
+    iwctl station "$dev" scan >/dev/null 2>&1; sleep 4
+    local -a items=(); local line ssid sec
+    while IFS= read -r line; do
+        line=$(sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' <<<"$line")
+        if [[ $line =~ ^[[:space:]]*(\>[[:space:]]+)?(.*[^[:space:]])[[:space:]]+(psk|open|8021x|wep|owe)[[:space:]]+\*+ ]]; then
+            ssid=${BASH_REMATCH[2]}; sec=${BASH_REMATCH[3]}
+            items+=("$ssid" "$sec")
+        fi
+    done < <(iwctl station "$dev" get-networks 2>/dev/null)
+    items+=("[shell]" "type iwctl commands yourself")
+    ssid=$(d --title "Wi-Fi" --menu "Pick a network:" 20 60 12 "${items[@]}") || return 1
+    if [[ $ssid == "[shell]" ]]; then
+        clear; echo "iwctl shell. Example: station $dev connect \"My Network\"   (type 'exit' when done)"; iwctl; return 0
+    fi
+    local pw=""
+    pw=$(d --title "Wi-Fi" --insecure --passwordbox "Password for \"$ssid\" (leave empty for open networks):" 9 60) || return 1
+    dialog --backtitle "$BT" --infobox "Connecting to $ssid..." 3 50
+    if [[ -n $pw ]]; then iwctl --passphrase "$pw" station "$dev" connect "$ssid" >>"$LOG" 2>&1
+    else iwctl station "$dev" connect "$ssid" >>"$LOG" 2>&1; fi
+    sleep 5
+}
+
+ensure_online() {
+    while ! online; do
+        local c
+        c=$(d --title "No internet" --menu "Online mode needs an internet connection." 14 64 4 \
+            wifi "Connect to Wi-Fi" \
+            retry "Check again (plugged in a cable?)" \
+            offline "Switch to offline mode") || return 1
+        case $c in
+            wifi) wifi_connect ;;
+            retry) dialog --backtitle "$BT" --infobox "Checking connection..." 3 40; sleep 3 ;;
+            offline) if has_offline_repo; then MODE=offline; return 0; else msg "This ISO has no offline package repository."; fi ;;
+        esac
+    done
+    return 0
+}
+
+# ---------------------------------------------------------------- steps
+pick_mode() {
+    if ! has_offline_repo; then
+        # Grim Lite (and any USB without packages on it): everything comes from the internet
+        MODE=online
+        msg "This USB installs Grim OS over the internet, so it can stay small.\n\nNext you'll connect to Wi-Fi or plug in a cable. Everything you pick is downloaded fresh." "Online install"
+        ensure_online || return 1
+        return 0
+    fi
+    local -a items=(online "Download the newest packages (needs internet)")
+    if has_offline_repo; then items+=(offline "Install from this USB, no internet needed"); fi
+    local c
+    c=$(d --title "Install mode" --default-item "${MODE:-online}" --menu \
+        "How should Grim OS be installed?\n\nOffline mode includes Hyprland, Niri, i3 and Sway.\nKDE Plasma, GNOME and COSMIC need online mode." \
+        14 70 2 "${items[@]}") || return 1
+    MODE=$c
+    if [[ $MODE == online ]]; then ensure_online || return 1; fi
+    if [[ $MODE == offline ]]; then
+        local -a keep=(); local de
+        for de in "${DESKTOPS[@]}"; do [[ " ${GRIM_OFFLINE_DES[*]} " == *" $de "* ]] && keep+=("$de"); done
+        DESKTOPS=("${keep[@]}"); NVIDIA=no
+    fi
+}
+
+pick_locale() {
+    local -a common=(en_US "English (US)" en_GB "English (UK)" de_DE "Deutsch" fr_FR "Français"
+        es_ES "Español (España)" es_MX "Español (México)" pt_BR "Português (Brasil)" pt_PT "Português"
+        it_IT "Italiano" nl_NL "Nederlands" pl_PL "Polski" sv_SE "Svenska" fi_FI "Suomi"
+        nb_NO "Norsk" da_DK "Dansk" cs_CZ "Čeština" tr_TR "Türkçe" ru_RU "Русский" uk_UA "Українська"
+        ja_JP "日本語" ko_KR "한국어" zh_CN "中文 (简体)" zh_TW "中文 (繁體)" other "Show every language...")
+    local c
+    c=$(d --title "Language" --default-item "${LOCALE%%.*}" --menu "System language:" 22 60 15 "${common[@]}") || return 1
+    if [[ $c == other ]]; then
+        local -a all=(); local l
+        while read -r l _; do all+=("$l" ""); done < <(grep -E '\.UTF-8 UTF-8$' /usr/share/i18n/SUPPORTED)
+        c=$(d --title "Language" --menu "All languages:" 22 50 15 "${all[@]}") || return 1
+        LOCALE=$c
+    else
+        LOCALE="$c.UTF-8"
+    fi
+}
+
+pick_timezone() {
+    local -a items=()
+    online && items+=(auto "Detect from my internet connection")
+    local r
+    while read -r r; do items+=("$r" ""); done < <(timedatectl list-timezones | cut -d/ -f1 | sort -u)
+    local region city
+    region=$(d --title "Time zone" --menu "Pick your region (current: $TIMEZONE):" 22 60 15 "${items[@]}") || return 1
+    if [[ $region == auto ]]; then
+        local tz; tz=$(curl -fsS --max-time 6 'http://ip-api.com/line/?fields=timezone' 2>/dev/null)
+        if [[ -n $tz && -f /usr/share/zoneinfo/$tz ]]; then
+            ask "Detected time zone: $tz\n\nUse it?" "Time zone" && { TIMEZONE=$tz; return 0; }
+        else
+            msg "Could not detect your time zone. Pick it from the list." "Time zone"
+        fi
+        pick_timezone; return
+    fi
+    local -a cities=()
+    while read -r city; do cities+=("$city" ""); done < <(timedatectl list-timezones | grep "^$region/" | cut -d/ -f2-)
+    if ((${#cities[@]} == 0)); then TIMEZONE=$region; return 0; fi
+    city=$(d --title "Time zone" --menu "Pick a city in $region:" 22 60 15 "${cities[@]}") || return 1
+    TIMEZONE="$region/$city"
+}
+
+pick_keymap() {
+    local -a items=(us "English (US)" uk "English (UK)" de-latin1 "German" fr "French"
+        es "Spanish" la-latin1 "Latin American" it "Italian" pt-latin1 "Portuguese" br-abnt2 "Brazilian"
+        sv-latin1 "Swedish" no-latin1 "Norwegian" dk-latin1 "Danish" fi "Finnish" pl "Polish"
+        cz-qwertz "Czech" hu "Hungarian" trq "Turkish" ru "Russian" ua "Ukrainian" jp106 "Japanese"
+        dvorak "US Dvorak" colemak "US Colemak" other "Show every keymap...")
+    local c
+    c=$(d --title "Keyboard" --default-item "$KEYMAP" --menu "Keyboard layout (it changes right away, so you can test it):" 22 64 15 "${items[@]}") || return 1
+    if [[ $c == other ]]; then
+        local -a all=(); local k
+        while read -r k; do all+=("$k" ""); done < <(localectl list-keymaps)
+        c=$(d --title "Keyboard" --menu "All console keymaps:" 22 50 15 "${all[@]}") || return 1
+    fi
+    KEYMAP=$c
+    loadkeys "$KEYMAP" 2>/dev/null
+    XKB_VARIANT=""
+    case $KEYMAP in
+        uk) XKB_LAYOUT=gb ;; de*) XKB_LAYOUT=de ;; fr*) XKB_LAYOUT=fr ;; es*) XKB_LAYOUT=es ;;
+        la-latin1) XKB_LAYOUT=latam ;; it*) XKB_LAYOUT=it ;; pt-latin1) XKB_LAYOUT=pt ;;
+        br-abnt2) XKB_LAYOUT=br ;; sv-latin1|se*) XKB_LAYOUT=se ;; no*) XKB_LAYOUT=no ;;
+        dk*) XKB_LAYOUT=dk ;; fi*) XKB_LAYOUT=fi ;; pl*) XKB_LAYOUT=pl ;; cz*) XKB_LAYOUT=cz ;;
+        hu*) XKB_LAYOUT=hu ;; trq|tr*) XKB_LAYOUT=tr ;; ru*) XKB_LAYOUT=ru ;; ua*) XKB_LAYOUT=ua ;;
+        jp106) XKB_LAYOUT=jp ;; dvorak) XKB_LAYOUT=us; XKB_VARIANT=dvorak ;;
+        colemak) XKB_LAYOUT=us; XKB_VARIANT=colemak ;; *) XKB_LAYOUT=us ;;
+    esac
+}
+
+pick_user() {
+    local h u p1 p2
+    while :; do
+        h=$(d --title "Computer name" --inputbox "Name of this computer (letters, numbers, dashes):" 9 60 "$HOSTNAME_") || return 1
+        [[ $h =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,62})$ ]] && break
+        msg "\"$h\" is not a valid computer name." "Computer name"
+    done
+    HOSTNAME_=$h
+    while :; do
+        u=$(d --title "Your account" --inputbox "Username (lowercase, no spaces):" 9 60 "$USERNAME_") || return 1
+        [[ $u =~ ^[a-z_][a-z0-9_-]{0,31}$ && $u != root ]] && break
+        msg "\"$u\" is not a valid username. Use lowercase letters, numbers, - and _." "Your account"
+    done
+    USERNAME_=$u
+    while :; do
+        p1=$(d --title "Your account" --insecure --passwordbox "Password for $USERNAME_:" 9 60) || return 1
+        p2=$(d --title "Your account" --insecure --passwordbox "Type the password again:" 9 60) || return 1
+        [[ -n $p1 && $p1 == "$p2" ]] && break
+        msg "The passwords were empty or did not match. Try again." "Your account"
+    done
+    USERPASS=$p1
+    local c
+    c=$(d --title "Root account" --menu "How should the root (admin) account work?" 12 70 3 \
+        sudo "Lock root. $USERNAME_ uses sudo (recommended)" \
+        same "Give root the same password as $USERNAME_" \
+        own "Set a separate root password") || return 1
+    case $c in
+        sudo) ROOTPASS="" ;;
+        same) ROOTPASS=$USERPASS ;;
+        own)
+            while :; do
+                p1=$(d --title "Root account" --insecure --passwordbox "Root password:" 9 60) || return 1
+                p2=$(d --title "Root account" --insecure --passwordbox "Type it again:" 9 60) || return 1
+                [[ -n $p1 && $p1 == "$p2" ]] && break
+                msg "The passwords were empty or did not match." "Root account"
+            done
+            ROOTPASS=$p1 ;;
+    esac
+}
+
+live_disk() {
+    # The disk the live system booted from, so we never offer to wipe it.
+    local src; src=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null) || return 0
+    [[ -b $src ]] && lsblk -no PKNAME "$src" 2>/dev/null | head -1
+}
+
+pick_disk() {
+    local live; live=$(live_disk)
+    local -a items=(); local name size model tran
+    while read -r name size tran model; do
+        [[ -n $live && $name == "/dev/$live" ]] && continue
+        items+=("$name" "$size ${tran:-} ${model:-}")
+    done < <(lsblk -dpno NAME,SIZE,TRAN,MODEL -e 7,11,251,252 | awk '{n=$1; s=$2; t=$3; $1=$2=$3=""; sub(/^ +/,""); print n, s, t, $0}')
+    if ((${#items[@]} == 0)); then msg "No disk was found to install to." "Disk"; return 1; fi
+    DISK=$(d --title "Disk" --default-item "$DISK" --menu "Install Grim OS to which disk?" 16 72 8 "${items[@]}") || return 1
+
+    local c
+    c=$(d --title "Partitioning" --default-item "$PARTMODE" --menu "How should $DISK be set up?" 13 72 2 \
+        auto "Automatic: ERASE the whole disk and set it up for me" \
+        manual "Manual: I'll make partitions myself (dual boot, custom)") || return 1
+    PARTMODE=$c
+
+    c=$(d --title "File system" --default-item "$FS" --menu "File system for Grim OS:" 12 70 2 \
+        ext4 "ext4: simple and reliable" \
+        btrfs "btrfs: compression and snapshots") || return 1
+    FS=$c
+
+    if [[ $PARTMODE == manual ]]; then manual_partitions || return 1; fi
+}
+
+manual_partitions() {
+    local esp_hint=""
+    [[ $UEFI == yes ]] && esp_hint="\n - an EFI partition (type 'EFI System', 300 MB or more, you can reuse Windows' one)"
+    [[ $UEFI == no ]] && esp_hint="\n - on GPT disks, a 1 MB 'BIOS boot' partition"
+    msg "cfdisk will open for $DISK.\n\nYou need:\n - a root partition for Grim OS (20 GB or more)$esp_hint\n - optional: a swap partition\n\nPick 'Write' then 'Quit' when you're done." "Manual partitioning"
+    cfdisk "$DISK"
+    partprobe "$DISK" 2>/dev/null; udevadm settle
+
+    local -a parts=(); local n s f t
+    while read -r n s f t; do parts+=("$n" "$s ${f:-unformatted} ${t:-}"); done \
+        < <(lsblk -pnlo NAME,SIZE,FSTYPE,PARTTYPENAME "$DISK" | awk 'NR>1')
+    ((${#parts[@]})) || { msg "$DISK has no partitions." "Manual partitioning"; return 1; }
+
+    ROOT_PART=$(d --title "Root partition" --menu "Which partition is Grim OS's root (/)? It will be FORMATTED." 18 76 8 "${parts[@]}") || return 1
+    if [[ $UEFI == yes ]]; then
+        EFI_PART=$(d --title "EFI partition" --menu "Which partition is the EFI partition?" 18 76 8 "${parts[@]}") || return 1
+        [[ $EFI_PART == "$ROOT_PART" ]] && { msg "Root and EFI must be different partitions."; return 1; }
+        if [[ -n $(lsblk -no FSTYPE "$EFI_PART") ]] && ask "$EFI_PART already has a file system.\n\nKeep it? (Choose Yes if Windows or another system uses it.)" "EFI partition"; then
+            FORMAT_EFI=no
+        else
+            FORMAT_EFI=yes
+        fi
+    fi
+    SWAP_PART=$(d --title "Swap" --menu "Use a swap partition? (Grim OS also sets up zram swap in memory.)" 18 76 8 none "No swap partition" "${parts[@]}") || return 1
+    [[ $SWAP_PART == none ]] && SWAP_PART=""
+    return 0
+}
+
+pick_desktops() {
+    local -a items=(); local de state tag
+    for de in "${GRIM_DE_ORDER[@]}"; do
+        state=off; [[ " ${DESKTOPS[*]} " == *" $de "* ]] && state=on
+        tag=""
+        if [[ $MODE == offline && " ${GRIM_OFFLINE_DES[*]} " != *" $de "* ]]; then
+            tag=" (online mode only)"
+        fi
+        items+=("$de" "${GRIM_DE_NAME[$de]}: ${GRIM_DE_DESC[$de]}$tag" "$state")
+    done
+    local c
+    c=$(d --title "Desktop" --separate-output --checklist \
+        "Pick one or more with SPACE, then ENTER.\nOnly what you pick gets installed.\nPick none for a terminal-only system." \
+        18 86 7 "${items[@]}") || return 1
+    DESKTOPS=()
+    local bad=()
+    for de in $c; do
+        if [[ $MODE == offline && " ${GRIM_OFFLINE_DES[*]} " != *" $de "* ]]; then bad+=("${GRIM_DE_NAME[$de]}"); continue; fi
+        DESKTOPS+=("$de")
+    done
+    ((${#bad[@]})) && msg "$(join "${bad[@]}") need online mode and were left out.\n\nSwitch to online mode in the summary to add them." "Desktop"
+    return 0
+}
+
+detect_drivers() {
+    DRIVER_PKGS=(); DRIVER_REPORT=""
+    local -A want=(); local line vendor dev mod
+    add() { want[$1]=1; }
+    note() { DRIVER_REPORT+="$1\n"; }
+
+    # Network and graphics devices on PCI
+    while IFS= read -r line; do
+        vendor=$(grep -oE '\[[0-9a-f]{4}:[0-9a-f]{4}\]' <<<"$line" | tail -1 | tr -d '[]')
+        dev=${vendor#*:}; vendor=${vendor%%:*}
+        local name; name=$(sed -E 's/^[0-9a-f:.]+ //; s/ \[[0-9a-f]{4}\]//; s/ \[[0-9a-f]{4}:[0-9a-f]{4}\].*//' <<<"$line")
+        case "$line" in
+            *"Network controller"*|*"Ethernet controller"*)
+                case $vendor in
+                    8086) add linux-firmware-intel; note "Network: $name -> Intel firmware" ;;
+                    10ec) add linux-firmware-realtek; note "Network: $name -> Realtek firmware" ;;
+                    168c|17cb|1969) add linux-firmware-atheros; note "Network: $name -> Qualcomm/Atheros firmware" ;;
+                    14c3|1814) add linux-firmware-mediatek; note "Network: $name -> MediaTek firmware" ;;
+                    11ab|1b4b) add linux-firmware-marvell; note "Network: $name -> Marvell firmware" ;;
+                    14e4)
+                        add linux-firmware-broadcom
+                        case $dev in
+                            4311|4312|4313|4315|4327|4328|4329|432a|432b|432c|432d|4353|4357|4358|4359|4365|43a0|43b1|4331)
+                                add broadcom-wl-dkms; add dkms; add linux-headers
+                                note "Network: $name -> Broadcom wl driver + firmware" ;;
+                            *) note "Network: $name -> Broadcom firmware" ;;
+                        esac ;;
+                    *) note "Network: $name -> no extra driver needed" ;;
+                esac ;;
+            *"VGA"*|*"3D controller"*|*"Display controller"*)
+                case $vendor in
+                    1002) add linux-firmware-amdgpu; add linux-firmware-radeon; add vulkan-radeon; note "Graphics: $name -> AMD firmware + Vulkan" ;;
+                    8086) add linux-firmware-intel; add vulkan-intel; add intel-media-driver; note "Graphics: $name -> Intel firmware + Vulkan + video decoding" ;;
+                    10de) add linux-firmware-nvidia; note "Graphics: $name -> NVIDIA firmware (open nouveau driver)"; HAS_NVIDIA=yes ;;
+                    *) note "Graphics: $name -> generic driver" ;;
+                esac ;;
+        esac
+    done < <(lspci -nn 2>/dev/null | grep -E 'Network controller|Ethernet controller|VGA|3D controller|Display controller')
+
+    # USB Wi-Fi / Ethernet adapters
+    while read -r _ _ _ _ _ vendor _; do
+        case ${vendor%%:*} in
+            0bda|2357|7392|2001) add linux-firmware-realtek; note "USB adapter $vendor -> Realtek firmware" ;;
+            148f|0e8d) add linux-firmware-mediatek; note "USB adapter $vendor -> MediaTek firmware" ;;
+            0cf3) add linux-firmware-atheros; note "USB adapter $vendor -> Atheros firmware" ;;
+        esac
+    done < <(lsusb 2>/dev/null)
+
+    # Whatever drivers the live system already loaded for network cards
+    for mod in /sys/class/net/*/device/driver; do
+        [[ -e $mod ]] || continue
+        case $(basename "$(readlink -f "$mod")") in
+            iwlwifi|e1000e|igc|ixgbe) add linux-firmware-intel ;;
+            ath9k*|ath10k*|ath11k*|ath12k*|carl9170) add linux-firmware-atheros ;;
+            rtw88*|rtw89*|rtl8*|r8169) add linux-firmware-realtek ;;
+            mt76*|mt7*) add linux-firmware-mediatek ;;
+            brcmfmac|brcmsmac) add linux-firmware-broadcom ;;
+            mwifiex*) add linux-firmware-marvell ;;
+        esac
+    done
+
+    add linux-firmware-other
+    DRIVER_PKGS=("${!want[@]}")
+    [[ -z $DRIVER_REPORT ]] && DRIVER_REPORT="No network or graphics hardware found that needs extra drivers.\n"
+}
+
+pick_drivers() {
+    HAS_NVIDIA=no
+    if ask "Automatically find your network (Wi-Fi/Ethernet) and graphics hardware and install only the drivers and firmware it needs?\n\nChoose No to install every firmware file instead (bigger, but covers hardware you plug in later)." "Drivers"; then
+        AUTODRIVERS=yes
+        dialog --backtitle "$BT" --infobox "Looking at your hardware..." 3 40
+        detect_drivers
+        msg "Found:\n\n$DRIVER_REPORT\nPackages: $(join "${DRIVER_PKGS[@]}")" "Drivers"
+    else
+        AUTODRIVERS=no
+        lspci -nn 2>/dev/null | grep -qE '(VGA|3D).*\[10de:' && HAS_NVIDIA=yes
+    fi
+    NVIDIA=no
+    if [[ $HAS_NVIDIA == yes && $MODE == online ]]; then
+        ask "An NVIDIA graphics card was found.\n\nInstall NVIDIA's own driver (nvidia-open)? It's faster, but only works on GTX 16xx / RTX 20xx and newer.\n\nChoose No to keep the open nouveau driver." "NVIDIA" && NVIDIA=yes
+    fi
+    return 0
+}
+
+# kernels this USB can install: offline, what's in its repository; online, Arch's three
+# plus Linux Grim when it's on the USB
+# Looks packages up in the USB's repository. The live system never syncs it into
+# /var/lib/pacman, so give pacman its own database folder with a copy of grimos.db.
+offline_pacman() {
+    if [[ ! -f $OFFLINE_DB/sync/grimos.db ]]; then
+        [[ -f $OFFLINE_REPO/grimos.db ]] || return 1
+        mkdir -p "$OFFLINE_DB/sync" && cp "$OFFLINE_REPO/grimos.db" "$OFFLINE_DB/sync/grimos.db" || return 1
+    fi
+    pacman --config "$OFFLINE_CONF" --dbpath "$OFFLINE_DB" "$@"
+}
+
+kernel_available() {
+    local k=$1
+    if [[ $MODE == offline || $k == linux-grim ]]; then
+        offline_pacman -Sp --print-format %n "$k" &>/dev/null
+    else
+        return 0
+    fi
+}
+
+pick_kernel() {
+    local c items=() k
+    for k in "${GRIM_KERNELS[@]}"; do
+        kernel_available "$k" && items+=("$k" "${GRIM_KERNEL_NAME[$k]}: ${GRIM_KERNEL_DESC[$k]}")
+    done
+    ((${#items[@]})) || return 0
+    kernel_available "$KERNEL" || KERNEL=${items[0]}
+    c=$(d --title "Kernel" --default-item "$KERNEL" --menu \
+        "Which Linux kernel should Grim OS run?\n\nNot sure? Keep Linux. You can add another later with:  sudo pacman -S linux-zen" 15 76 3 \
+        "${items[@]}") || return 1
+    KERNEL=$c
+    if [[ $KERNEL == linux-grim ]]; then
+        msg "Linux Grim is built for this release of Grim OS. It isn't in Arch's repositories, so 'update' won't upgrade it: it gets updated when you install a newer Grim OS, or you can switch to another kernel any time (sudo pacman -S linux)." "Linux Grim"
+    fi
+}
+
+pick_bootloader() {
+    if [[ $UEFI != yes ]]; then
+        BOOTLOADER=grub
+        msg "This computer started the USB in BIOS (legacy) mode, so Grim OS will use GRUB.\n\nLimine is offered when the USB is started in UEFI mode." "Bootloader"
+        return 0
+    fi
+    local c
+    c=$(d --title "Bootloader" --default-item "$BOOTLOADER" --menu \
+        "Which bootloader should start Grim OS?\n\nBoth show the Grim OS logo. You can switch later by reinstalling." 15 74 2 \
+        grub   "GRUB: the classic, finds Windows and other systems on its own" \
+        limine "Limine: small and fast, kernels live on the EFI partition") || return 1
+    BOOTLOADER=$c
+}
+
+pick_pkglist() {
+    if ! ask "Use a package list, like NixOS?\n\nGrim OS keeps every app you install in one file:\n  /etc/grimos/packages.conf\n\nAdd a name to it and run 'update' to install it. Delete a line and run 'update' to uninstall it. Apps you install with pacman or Shelly are added to the file the next time you run 'update'.\n\nYou can type your first apps on the next screen." "Package list"; then
+        PKGLIST="off"; return 0
+    fi
+    PKGLIST="on"
+    local tmp; tmp=$(mktemp)
+    {
+        echo "# Type the apps you want, one per line. Lines starting with # are ignored."
+        echo "# For AUR apps add '# aur' after the name, for example:  vesktop-bin # aur"
+        echo "# Examples: firefox  discord  steam  obsidian  neovim  prismlauncher"
+        [[ -n $PKGLIST_APPS ]] && printf '%s\n' "$PKGLIST_APPS"
+    } >"$tmp"
+    local out
+    out=$(d --title "Package list: your apps" --editbox "$tmp" 20 72) || { rm -f "$tmp"; return 1; }
+    rm -f "$tmp"
+    PKGLIST_APPS=$(printf '%s\n' "$out" | sed -E 's/[[:space:]]+$//' | grep -vE '^[[:space:]]*(#|$)')
+    return 0
+}
+
+# Splits PKGLIST_APPS into repo apps that can be installed now and ones left for 'update'
+split_pkglist() {
+    LIST_NOW=(); LIST_LATER=()
+    local line name look=(pacman)
+    [[ $MODE == offline ]] && look=(offline_pacman)
+    while IFS= read -r line; do
+        [[ -z $line ]] && continue
+        name=${line%%#*}; name=${name//[[:space:]]/}
+        [[ -z $name ]] && continue
+        if [[ $line == *"# aur"* ]]; then LIST_LATER+=("$name"); continue; fi
+        if "${look[@]}" -Sp --print-format %n "$name" &>/dev/null; then LIST_NOW+=("$name")
+        else LIST_LATER+=("$name"); fi
+    done <<<"$PKGLIST_APPS"
+}
+
+# ---------------------------------------------------------------- summary
+summary() {
+    while :; do
+        # switched to offline after picking a kernel the USB doesn't carry: fall back
+        if ! kernel_available "$KERNEL"; then
+            local k; for k in linux-lts linux "${GRIM_KERNELS[@]}"; do kernel_available "$k" && { KERNEL=$k; break; }; done
+        fi
+        local de_list="none (terminal only)"
+        if ((${#DESKTOPS[@]})); then local -a n=(); local de; for de in "${DESKTOPS[@]}"; do n+=("${GRIM_DE_NAME[$de]}"); done; de_list=$(join "${n[@]}"); fi
+        local disk_line="${DISK:-not set}"
+        if [[ -n $DISK ]]; then
+            disk_line="$DISK  (auto, ERASE, $FS)"
+            [[ $PARTMODE == manual ]] && disk_line="$DISK  (manual, root ${ROOT_PART:-?}, $FS)"
+        fi
+        local drv="auto-detect"; [[ $AUTODRIVERS == no ]] && drv="all firmware"; [[ $NVIDIA == yes ]] && drv+=" + NVIDIA"
+        local rootl="locked (sudo)"; [[ -n $ROOTPASS ]] && rootl="password set"
+        local bootl="GRUB"; [[ $BOOTLOADER == limine ]] && bootl="Limine"
+        local kernl="${GRIM_KERNEL_NAME[$KERNEL]:-$KERNEL}"
+        local listl="off"
+        if [[ $PKGLIST == on ]]; then listl="on, $(grep -c . <<<"$PKGLIST_APPS") apps typed in"; [[ -z $PKGLIST_APPS ]] && listl="on, empty"; fi
+        local c
+        c=$(d --title "Summary" --ok-label "Change" --cancel-label "Quit" --extra-button --extra-label "INSTALL" \
+            --default-item install --menu "Check your settings. Pick one to change it, or press INSTALL." 22 76 12 \
+            mode     "Install mode   ${MODE^}" \
+            locale   "Language       $LOCALE" \
+            timezone "Time zone      $TIMEZONE" \
+            keymap   "Keyboard       $KEYMAP (desktop: $XKB_LAYOUT${XKB_VARIANT:+ $XKB_VARIANT})" \
+            user     "Account        ${USERNAME_:-not set}@$HOSTNAME_, root $rootl" \
+            disk     "Disk           $disk_line" \
+            desktop  "Desktop        $de_list" \
+            drivers  "Drivers        $drv" \
+            kernel   "Kernel         $kernl" \
+            boot     "Bootloader     $bootl" \
+            pkglist  "Package list   $listl")
+        local rc=$?
+        case $rc in
+            0) case $c in
+                   mode) pick_mode ;; locale) pick_locale ;; timezone) pick_timezone ;;
+                   keymap) pick_keymap ;; user) pick_user ;; disk) pick_disk ;;
+                   desktop) pick_desktops ;; drivers) pick_drivers ;; kernel) pick_kernel ;; boot) pick_bootloader ;; pkglist) pick_pkglist ;;
+               esac ;;
+            3) if [[ -z $USERNAME_ || -z $USERPASS ]]; then msg "Set up your account first."; continue; fi
+               if [[ -z $DISK ]]; then msg "Pick a disk first."; continue; fi
+               [[ $PARTMODE == manual && -z $ROOT_PART ]] && { msg "Pick a root partition first."; continue; }
+               if [[ $BOOTLOADER == limine && $PARTMODE == manual && -n $EFI_PART ]]; then
+                   local esp_mb; esp_mb=$(( $(lsblk -bno SIZE "$EFI_PART") / 1048576 ))
+                   if (( esp_mb < 400 )); then
+                       msg "Limine keeps the kernels on the EFI partition, which needs at least 400 MB.\n\n$EFI_PART is only ${esp_mb} MB. Pick GRUB, or make a bigger EFI partition." "Bootloader"
+                       continue
+                   fi
+               fi
+               local warn="ALL DATA on $DISK will be erased."
+               [[ $PARTMODE == manual ]] && warn="$ROOT_PART will be formatted.${EFI_PART:+ $EFI_PART will $([[ $FORMAT_EFI == yes ]] && echo "be formatted" || echo "be kept").}"
+               ask "$warn\n\nThis cannot be undone. Install Grim OS now?" "Last chance" && return 0 ;;
+            *) ask "Quit the installer? Nothing has been changed on your disks." "Quit" && { clear; exit 0; } ;;
+        esac
+    done
+}
+
+# ---------------------------------------------------------------- install
+prepare_disk() {
+    umount -R "$MNT" 2>/dev/null; swapoff -a 2>/dev/null
+    local efi="" root
+    if [[ $PARTMODE == auto ]]; then
+        step "Erasing $DISK" bash -c "wipefs -af '$DISK' && sgdisk -Z '$DISK'"
+        if [[ $UEFI == yes ]]; then
+            step "Partitioning $DISK (UEFI)" sgdisk -n1:0:+1G -t1:ef00 -c1:EFI -n2:0:0 -t2:8304 -c2:grimos "$DISK"
+            efi=$(part "$DISK" 1); root=$(part "$DISK" 2)
+        else
+            step "Partitioning $DISK (BIOS)" sgdisk -n1:0:+1M -t1:ef02 -c1:biosboot -n2:0:0 -t2:8304 -c2:grimos "$DISK"
+            root=$(part "$DISK" 2)
+        fi
+        partprobe "$DISK" 2>/dev/null; udevadm settle; sleep 1
+        [[ -n $efi ]] && step "Formatting EFI partition" mkfs.fat -F32 -n EFI "$efi"
+    else
+        root=$ROOT_PART; efi=$EFI_PART
+        [[ -n $efi && $FORMAT_EFI == yes ]] && step "Formatting EFI partition" mkfs.fat -F32 -n EFI "$efi"
+        [[ -n $SWAP_PART ]] && step "Setting up swap" mkswap -L swap "$SWAP_PART"
+    fi
+    if [[ $FS == btrfs ]]; then
+        step "Formatting root (btrfs)" mkfs.btrfs -f -L grimos "$root"
+        mount "$root" "$MNT" || die "Could not mount $root"
+        local sv; for sv in @ @home @log @pkg @snapshots; do btrfs subvolume create "$MNT/$sv" >>"$LOG" 2>&1; done
+        umount "$MNT"
+        local o="noatime,compress=zstd:1"
+        mount -o "$o,subvol=@" "$root" "$MNT" || die "Could not mount $root"
+        mkdir -p "$MNT"/{home,var/log,var/cache/pacman/pkg,.snapshots}
+        mount -o "$o,subvol=@home" "$root" "$MNT/home"
+        mount -o "$o,subvol=@log" "$root" "$MNT/var/log"
+        mount -o "$o,subvol=@pkg" "$root" "$MNT/var/cache/pacman/pkg"
+        mount -o "$o,subvol=@snapshots" "$root" "$MNT/.snapshots"
+    else
+        step "Formatting root (ext4)" mkfs.ext4 -F -L grimos "$root"
+        mount "$root" "$MNT" || die "Could not mount $root"
+    fi
+    if [[ -n $efi ]]; then
+        local em; em=$(esp_mnt)
+        mkdir -p "$MNT$em"; mount "$efi" "$MNT$em" || die "Could not mount $efi"
+    fi
+    [[ -n $SWAP_PART ]] && swapon "$SWAP_PART"
+    return 0
+}
+
+package_list() {
+    PKGS=("${GRIM_BASE[@]}" "$KERNEL")
+    # shellcheck disable=SC2206
+    PKGS+=(${GRIM_BOOT_PKGS[$BOOTLOADER]})
+    [[ $FS == btrfs ]] || PKGS=("${PKGS[@]/btrfs-progs}")
+    if [[ $AUTODRIVERS == yes ]]; then PKGS+=("${DRIVER_PKGS[@]}"); else PKGS+=("${GRIM_FIRMWARE_FULL[@]}"); fi
+    # drivers built with DKMS need the headers of the kernel that was picked
+    PKGS=("${PKGS[@]/#linux-headers/$KERNEL-headers}")
+    if [[ $NVIDIA == yes ]]; then
+        # nvidia-open is built for the stock kernel only; zen and LTS get the DKMS version
+        if [[ $KERNEL == linux ]]; then PKGS+=("${GRIM_NVIDIA[@]}"); else PKGS+=("${GRIM_NVIDIA_DKMS[@]}" "$KERNEL-headers" dkms); fi
+    fi
+    if ((${#DESKTOPS[@]})); then
+        PKGS+=("${GRIM_DESKTOP_COMMON[@]}")
+        [[ $MODE == online ]] && PKGS+=("${GRIM_ONLINE_EXTRAS[@]}")
+        local de needs_greeter=yes
+        for de in "${DESKTOPS[@]}"; do
+            # shellcheck disable=SC2206
+            PKGS+=(${GRIM_DE_PKGS[$de]})
+            [[ -n ${GRIM_DE_DM[$de]:-} ]] && needs_greeter=no
+        done
+        [[ $needs_greeter == yes ]] && PKGS+=("${GRIM_GREETER[@]}")
+    fi
+    if [[ $PKGLIST == on && -n $PKGLIST_APPS ]]; then
+        split_pkglist
+        PKGS+=("${LIST_NOW[@]}")
+    fi
+    # drop empties and duplicates
+    mapfile -t PKGS < <(printf '%s\n' "${PKGS[@]}" | awk 'NF && !seen[$0]++')
+}
+
+install_packages() {
+    package_list
+    log "Packages: ${PKGS[*]}"
+    # written before the kernel is installed so the initramfs gets the right keymap
+    mkdir -p "$MNT/etc"; echo "KEYMAP=$KEYMAP" >"$MNT/etc/vconsole.conf"
+    if [[ $MODE == offline ]]; then
+        step "Installing ${#PKGS[@]} packages from the USB (offline)" pacstrap -C "$OFFLINE_CONF" -K "$MNT" "${PKGS[@]}"
+    else
+        # Make sure the live system has working mirrors
+        # Faster downloads: 10 at once, from the fastest nearby mirrors
+        sh "$SHARE/pacman/grim-pacman.sh" /etc/pacman.conf
+        if command -v reflector >/dev/null; then
+            step "Finding the fastest mirrors" bash -c 'timeout 60 reflector --protocol https --latest 20 --age 12 --fastest 8 --sort rate --download-timeout 3 --save /etc/pacman.d/mirrorlist.grim && [ -s /etc/pacman.d/mirrorlist.grim ] && mv /etc/pacman.d/mirrorlist.grim /etc/pacman.d/mirrorlist; true'
+        fi
+        if ! grep -q '^Server' /etc/pacman.d/mirrorlist; then
+            echo 'Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch' >/etc/pacman.d/mirrorlist
+        fi
+        local conf=/etc/pacman.conf
+        if [[ $KERNEL == linux-grim ]]; then
+            # Linux Grim only lives on the USB: add its repository for this install
+            conf=/tmp/grim-online.conf
+            { cat /etc/pacman.conf; printf '\n[grimos]\nSigLevel = Never\nServer = file://%s\n' "$OFFLINE_REPO"; } >"$conf"
+        fi
+        step "Installing ${#PKGS[@]} packages from the internet" pacstrap -C "$conf" -K "$MNT" "${PKGS[@]}"
+    fi
+}
+
+configure_system() {
+    step "Writing fstab" bash -c "genfstab -U '$MNT' >> '$MNT/etc/fstab'"
+
+    # mirrors for later updates (offline installs have none yet)
+    {
+        echo '# Grim OS mirrors. reflector.timer re-picks the fastest ones every week (or run: update --mirrors).'
+        grep '^Server' /etc/pacman.d/mirrorlist 2>/dev/null | grep -v geo.mirror | head -10
+        echo 'Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch'
+    } >"$MNT/etc/pacman.d/mirrorlist"
+
+    # Branding
+    install -Dm644 "$SHARE/ascii.txt" "$MNT/usr/share/grimos/ascii.txt"
+    install -Dm644 "$SHARE/logo.png" "$MNT/usr/share/pixmaps/grimos.png"
+    local t
+    for t in grim-banner grimhelp grimupdate grimfetch grim-rice grim-settings grimsettings grim-shot grim-power grim-term grim-volume grim-apps grim-backlight grim-updates-count grim-tty-session grim-de grim-de-settings grim-de-session grim-preview grimfetch-config grimmode; do
+        install -Dm755 "/usr/local/bin/$t" "$MNT/usr/local/bin/$t"
+    done
+    cp -r "$SHARE/rices" "$SHARE/wallpapers" "$SHARE/sessions" "$MNT/usr/share/grimos/"
+    install -Dm644 "$SHARE/logo.svg" "$MNT/usr/share/grimos/logo.svg"
+    install -Dm644 /usr/share/applications/os.grim.Settings.desktop "$MNT/usr/share/applications/os.grim.Settings.desktop"
+    install -Dm644 /usr/share/applications/grimhelp.desktop "$MNT/usr/share/applications/grimhelp.desktop"
+    install -Dm644 /usr/share/applications/os.grim.DeSettings.desktop "$MNT/usr/share/applications/os.grim.DeSettings.desktop"
+    cp -r /usr/share/grim-de "$MNT/usr/share/grim-de"
+    ln -sf grimupdate "$MNT/usr/local/bin/update"
+    install -Dm644 "$SHARE/packages.sh" "$MNT/usr/share/grimos/packages.sh"
+    install -Dm644 "$SHARE/dialogrc" "$MNT/usr/share/grimos/dialogrc"
+    cp -r "$SHARE/help" "$MNT/usr/share/grimos/help"
+    install -Dm644 "$SHARE/limine-bg.png" "$MNT/usr/share/grimos/limine-bg.png"
+    # low-RAM mode: a boot entry that starts only a text console (grimmode switches modes)
+    install -Dm644 /usr/lib/systemd/system/grim-lowram.target "$MNT/usr/lib/systemd/system/grim-lowram.target"
+    install -Dm644 /etc/profile.d/grim-lowram.sh "$MNT/etc/profile.d/grim-lowram.sh"
+    if [[ $BOOTLOADER == grub ]]; then install -Dm755 "$SHARE/boot/11_grim_lowram" "$MNT/etc/grub.d/11_grim_lowram"; fi
+    install -Dm644 /etc/grimfetch.toml "$MNT/etc/grimfetch.toml"
+    rm -f "$MNT/etc/os-release"; install -Dm644 /etc/os-release "$MNT/etc/os-release"
+    sed -i 's/^#\?NoUpgrade.*/NoUpgrade   = etc\/os-release/' "$MNT/etc/pacman.conf"
+    # pacman extras: colour, Pac-Man progress bar, 10 parallel downloads, reboot/orphan hooks, cache cleaning
+    sh "$SHARE/pacman/grim-pacman.sh" "$MNT/etc/pacman.conf"
+    install -Dm644 -t "$MNT/etc/pacman.d/hooks" "$SHARE"/pacman/hooks/*.hook
+    install -Dm644 "$SHARE/pacman/reflector.conf" "$MNT/etc/xdg/reflector/reflector.conf"
+    install -Dm644 "$SHARE/pacman/paccache-grim.conf" "$MNT/etc/systemd/system/paccache.service.d/grim.conf"
+    cp -r "$SHARE/pacman" "$MNT/usr/share/grimos/pacman"
+    cat >"$MNT/etc/profile.d/grim-banner.sh" <<'EOF'
+# Grim OS: show the banner when you log in on a text console
+case "$(tty 2>/dev/null)" in /dev/tty[0-9]*) [ -z "$GRIM_BANNER_SHOWN" ] && export GRIM_BANNER_SHOWN=1 && grim-banner "$(uname -r | sed s/arch/grim/)" && printf '   Type \033[1mgrimhelp\033[0m for help and apps, \033[1mupdate\033[0m to update.\n\n' ;; esac
+EOF
+    if [[ -d $SHARE/grub-theme ]]; then
+        mkdir -p "$MNT/usr/share/grub/themes"
+        cp -r "$SHARE/grub-theme" "$MNT/usr/share/grub/themes/grimos"
+    fi
+
+    # Keyboard for X11 / Wayland desktops
+    mkdir -p "$MNT/etc/X11/xorg.conf.d"
+    cat >"$MNT/etc/X11/xorg.conf.d/00-keyboard.conf" <<EOF
+Section "InputClass"
+    Identifier "system-keyboard"
+    MatchIsKeyboard "on"
+    Option "XkbLayout" "$XKB_LAYOUT"
+    Option "XkbVariant" "$XKB_VARIANT"
+EndSection
+EOF
+    printf 'XKB_DEFAULT_LAYOUT=%s\n' "$XKB_LAYOUT" >>"$MNT/etc/environment"
+    [[ -n $XKB_VARIANT ]] && printf 'XKB_DEFAULT_VARIANT=%s\n' "$XKB_VARIANT" >>"$MNT/etc/environment"
+
+    esp_dev() { findmnt -no SOURCE "$MNT$(esp_mnt)" 2>/dev/null; }
+    esp_disk() { local d; d=$(esp_dev); [[ -n $d ]] && echo "/dev/$(lsblk -no PKNAME "$d" | head -1)"; }
+    esp_partn() { local d; d=$(esp_dev); [[ -n $d ]] && lsblk -no PARTN "$d" | head -1; }
+
+    # Values go in through the environment so passwords never hit the command line
+    local services=(NetworkManager systemd-timesyncd fstrim.timer reflector.timer paccache.timer)
+    local dm=""
+    if ((${#DESKTOPS[@]})); then
+        local de
+        for de in gnome kde cosmic; do [[ " ${DESKTOPS[*]} " == *" $de "* ]] && { dm=${GRIM_DE_DM[$de]}; break; }; done
+        [[ -z $dm ]] && dm=greetd
+        services+=("$dm")
+    fi
+    # Grim DE in the login screen's session list
+    if [[ " ${DESKTOPS[*]} " == *" grim "* ]]; then
+        install -Dm644 "$SHARE/sessions/grim.desktop" "$MNT/usr/share/wayland-sessions/grim.desktop"
+    fi
+    # "No desktop (terminal)" in the login screen's session list (F3)
+    if [[ $dm == greetd ]]; then
+        install -Dm644 "$SHARE/sessions/grim-terminal.desktop" "$MNT/usr/share/wayland-sessions/grim-terminal.desktop"
+    fi
+
+    printf '\n\e[1;97m:: Configuring the new system\e[0m\n'
+    G_LOCALE=$LOCALE G_TZ=$TIMEZONE G_KEYMAP=$KEYMAP G_HOST=$HOSTNAME_ G_USER=$USERNAME_ \
+    G_UPASS=$USERPASS G_RPASS=$ROOTPASS G_SERVICES="${services[*]}" G_DM=$dm \
+    G_KERNEL=$KERNEL G_UEFI=$UEFI G_DISK=$DISK G_PARTMODE=$PARTMODE G_FS=$FS G_DESKTOPS="${DESKTOPS[*]}" \
+    G_XKB=$XKB_LAYOUT G_BOOT=$BOOTLOADER G_ROOTUUID=$(findmnt -no UUID "$MNT") \
+    G_ESP_DISK=$(esp_disk) G_ESP_PARTN=$(esp_partn) G_PKGLIST=$PKGLIST \
+        arch-chroot "$MNT" /bin/bash -s <<'CHROOT' 2>&1 | tee -a "$LOG"
+set -e
+ln -sf "/usr/share/zoneinfo/$G_TZ" /etc/localtime
+hwclock --systohc || true
+sed -i "s/^#\(${G_LOCALE//./\\.} \)/\1/; s/^#\(en_US\.UTF-8 \)/\1/" /etc/locale.gen
+locale-gen
+echo "LANG=$G_LOCALE" > /etc/locale.conf
+echo "KEYMAP=$G_KEYMAP" > /etc/vconsole.conf
+echo "$G_HOST" > /etc/hostname
+cat > /etc/hosts <<EOF
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $G_HOST.localdomain $G_HOST
+EOF
+
+useradd -m -G wheel -s /bin/bash "$G_USER"
+printf '%s:%s\n' "$G_USER" "$G_UPASS" | chpasswd
+if [ -n "$G_RPASS" ]; then printf 'root:%s\n' "$G_RPASS" | chpasswd; else passwd -l root; fi
+echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel
+chmod 440 /etc/sudoers.d/10-wheel
+
+# No lockout after wrong passwords (Arch locks for 10 minutes after 3 by default)
+sed -i 's/^#\? *deny *=.*/deny = 0/' /etc/security/faillock.conf
+grep -q '^deny = 0' /etc/security/faillock.conf || echo 'deny = 0' >> /etc/security/faillock.conf
+
+cat > /etc/systemd/zram-generator.conf <<EOF
+[zram0]
+zram-size = min(ram / 2, 8192)
+compression-algorithm = zstd
+EOF
+
+# Login screen for window managers
+if [ "$G_DM" = greetd ]; then
+cat > /etc/greetd/config.toml <<'EOF'
+[terminal]
+vt = 1
+
+[default_session]
+command = "tuigreet --time --remember --remember-user-session --asterisks --greeting 'Welcome to Grim OS' --xsession-wrapper 'startx /usr/bin/env'"
+user = "greeter"
+EOF
+fi
+
+# The default Grim rice for every desktop that was installed (keys, bar, dock, colours)
+if [ -n "$G_DESKTOPS" ]; then
+  runuser -u "$G_USER" -- env HOME="/home/$G_USER" XDG_CONFIG_HOME="/home/$G_USER/.config" \
+    grim-rice apply grim --all --no-reload || echo "warning: grim-rice could not write every desktop config"
+  # Grim DE's own config (Nord Snow wallpaper, outlines, glass, bar, dock)
+  case " $G_DESKTOPS " in *" grim "*)
+    runuser -u "$G_USER" -- env HOME="/home/$G_USER" XDG_CONFIG_HOME="/home/$G_USER/.config" grim-de apply \
+      || echo "warning: grim-de could not write its config" ;;
+  esac
+fi
+
+for s in $G_SERVICES; do systemctl enable "$s"; done
+# Bluetooth only when there's an adapter
+if [ -e /usr/lib/systemd/system/bluetooth.service ] && ls /sys/class/bluetooth/hci* >/dev/null 2>&1; then systemctl enable bluetooth; fi
+
+# Bootloader
+if [ "$G_BOOT" = limine ]; then
+  # Limine reads only FAT, so the kernels sit on the EFI partition mounted at /boot.
+  mkdir -p /boot/EFI/limine /boot/grimos
+  cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/BOOTX64.EFI
+  if [ "$G_PARTMODE" = auto ]; then
+    mkdir -p /boot/EFI/BOOT; cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI
+    touch /boot/grimos/owns-fallback
+  fi
+  cp /usr/share/grimos/limine-bg.png /boot/grimos/background.png
+  cmdline="root=UUID=$G_ROOTUUID rw quiet"
+  [ "$G_FS" = btrfs ] && cmdline="$cmdline rootflags=subvol=@"
+  {
+    echo "timeout: 5"
+    echo "interface_branding: Grim OS"
+    echo "interface_branding_color: 0"
+    echo "wallpaper: boot():/grimos/background.png"
+    echo "wallpaper_style: stretched"
+    echo "backdrop: f2f2f2"
+    echo "term_foreground: 0a0a0a"
+    echo "term_background: ff000000"
+    echo ""
+    echo "/Grim OS"
+    echo "    protocol: linux"
+    echo "    path: boot():/vmlinuz-$G_KERNEL"
+    echo "    cmdline: $cmdline"
+    for ucode in intel-ucode amd-ucode; do
+      [ -f "/boot/$ucode.img" ] && echo "    module_path: boot():/$ucode.img"
+    done
+    echo "    module_path: boot():/initramfs-$G_KERNEL.img"
+    echo ""
+    echo "/Grim OS - Low RAM, no desktop"
+    echo "    protocol: linux"
+    echo "    path: boot():/vmlinuz-$G_KERNEL"
+    echo "    cmdline: $cmdline systemd.unit=grim-lowram.target"
+    for ucode in intel-ucode amd-ucode; do
+      [ -f "/boot/$ucode.img" ] && echo "    module_path: boot():/$ucode.img"
+    done
+    echo "    module_path: boot():/initramfs-$G_KERNEL.img"
+    if [ -f /boot/EFI/Microsoft/Boot/bootmgfw.efi ]; then
+      echo ""
+      echo "/Windows"
+      echo "    protocol: efi"
+      echo "    path: boot():/EFI/Microsoft/Boot/bootmgfw.efi"
+    fi
+  } > /boot/limine.conf
+  efibootmgr --create --disk "$G_ESP_DISK" --part "$G_ESP_PARTN" --label "Grim OS" \
+    --loader '\EFI\limine\BOOTX64.EFI' --unicode >/dev/null
+  # keep the EFI copy of Limine current when the package updates
+  mkdir -p /etc/pacman.d/hooks
+  cat > /etc/pacman.d/hooks/90-limine.hook <<'EOF'
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = limine
+
+[Action]
+Description = Updating Limine on the EFI partition...
+When = PostTransaction
+Exec = /usr/bin/sh -c 'cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/BOOTX64.EFI; if [ -f /boot/grimos/owns-fallback ]; then cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI; fi'
+EOF
+else
+  sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="Grim OS"/; s/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' /etc/default/grub
+  if [ -f /usr/share/grub/themes/grimos/theme.txt ]; then
+    sed -i 's|^#\?GRUB_THEME=.*|GRUB_THEME="/usr/share/grub/themes/grimos/theme.txt"|' /etc/default/grub
+    grep -q '^GRUB_THEME=' /etc/default/grub || echo 'GRUB_THEME="/usr/share/grub/themes/grimos/theme.txt"' >> /etc/default/grub
+  fi
+  if [ "$G_PARTMODE" = manual ]; then
+    sed -i 's/^#\?GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub
+  fi
+  if [ "$G_UEFI" = yes ]; then
+    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GrimOS
+    # whole-disk installs also get the fallback path, so picky firmware still finds it.
+    # (skipped in manual mode so a shared Windows EFI partition keeps its own fallback)
+    if [ "$G_PARTMODE" = auto ]; then
+      grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable
+    fi
+  else
+    grub-install --target=i386-pc "$G_DISK"
+  fi
+  grub-mkconfig -o /boot/grub/grub.cfg
+fi
+echo "CHROOT-OK"
+CHROOT
+    grep -q CHROOT-OK "$LOG" || die "Configuring the new system failed."
+    [[ $PKGLIST == on ]] && write_pkglist
+}
+
+# NixOS-style package list: the file, what was there at install time (baseline) and what
+# 'update' last synced. grimupdate does the syncing.
+write_pkglist() {
+    split_pkglist
+    mkdir -p "$MNT/etc/grimos" "$MNT/var/lib/grimos"
+    {
+        echo "# Grim OS package list (like NixOS's configuration)."
+        echo "#"
+        echo "#   Add a package name and run 'update'   -> it gets installed"
+        echo "#   Delete a line and run 'update'        -> it gets uninstalled"
+        echo "#   Install with pacman or Shelly         -> it's added here at the next 'update'"
+        echo "#"
+        echo "# AUR packages end with '# aur'. The base system (kernel, drivers, desktop) is not"
+        echo "# listed here and is never removed by this file."
+        echo
+        local n
+        for n in "${LIST_NOW[@]}"; do echo "$n"; done
+        while IFS= read -r line; do
+            [[ -z $line ]] && continue
+            n=${line%%#*}; n=${n//[[:space:]]/}
+            [[ " ${LIST_NOW[*]} " == *" $n "* ]] && continue
+            [[ $line == *"# aur"* ]] && echo "$n # aur" || echo "$n"
+        done <<<"$PKGLIST_APPS"
+    } >"$MNT/etc/grimos/packages.conf"
+    # Everything explicitly installed now, except the apps from the list, is the base system
+    arch-chroot "$MNT" pacman -Qqe | grep -vxF -f <(printf '%s\n' "${LIST_NOW[@]}" "") >"$MNT/var/lib/grimos/baseline"
+    printf '%s\n' "${LIST_NOW[@]}" | grep . >"$MNT/var/lib/grimos/synced" || : >"$MNT/var/lib/grimos/synced"
+    ((${#LIST_LATER[@]})) && log "Package list: left for the first update: ${LIST_LATER[*]}"
+}
+
+do_install() {
+    clear
+    grim-banner "installing"
+    log "Install start: kernel=$KERNEL boot=$BOOTLOADER mode=$MODE disk=$DISK partmode=$PARTMODE fs=$FS desktops=${DESKTOPS[*]} autodrivers=$AUTODRIVERS"
+    if [[ $AUTODRIVERS == yes && ${#DRIVER_PKGS[@]} -eq 0 ]]; then detect_drivers; fi
+    timedatectl set-ntp true 2>/dev/null
+    prepare_disk
+    install_packages
+    configure_system
+    cp "$LOG" "$MNT/var/log/griminstall.log" 2>/dev/null
+    sync
+    if ask "Grim OS is installed!\n\nRemove the USB stick, then choose Yes to reboot.\nChoose No to stay in the live system (the new system stays mounted at $MNT)." "Done"; then
+        umount -R "$MNT"; reboot
+    fi
+    clear; echo "Grim OS is installed. The new system is mounted at $MNT. Type 'reboot' when ready."
+}
+
+# ---------------------------------------------------------------- main
+main() {
+    need_root
+    : >"$LOG"
+    [[ $GRIM_EDITION == lite ]] && KERNEL=linux-lts
+    if [[ ${1:-} == --load && -f ${2:-} ]]; then
+        # shellcheck disable=SC1090
+        source "$2"
+        loadkeys "$KEYMAP" 2>/dev/null
+        [[ $AUTODRIVERS == yes ]] && detect_drivers
+        [[ $MODE == online ]] && { ensure_online || exit 1; }
+        summary && do_install
+        return
+    fi
+    clear
+    grim-banner "installer"
+    echo "   Starting the installer..."; sleep 2
+    msg "Welcome to Grim OS.\n\nThis installer asks a few questions, shows you a summary, and only touches your disks after you confirm.\n\nUse the arrow keys, SPACE to tick boxes, ENTER to continue, ESC to go back." "Welcome"
+    pick_mode       || true
+    [[ -z $MODE ]] && MODE=online
+    pick_locale     || true
+    pick_keymap     || true
+    pick_timezone   || true
+    pick_user       || true
+    pick_disk       || true
+    pick_desktops   || true
+    pick_drivers    || true
+    pick_kernel     || true
+    pick_bootloader || true
+    pick_pkglist    || true
+    summary && do_install
+}
+
+main "$@"

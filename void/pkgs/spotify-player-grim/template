@@ -1,0 +1,23 @@
+# Template file for 'spotify-player'
+pkgname=spotify-player-grim
+version=0.25.2
+revision=1
+wrksrc="spotify-player-${version}"
+build_style=cargo
+configure_args="--features image,notify"
+make_install_args="--path spotify_player --features image,notify"
+hostmakedepends="pkg-config cmake clang rust-bindgen"
+makedepends="openssl-devel alsa-lib-devel dbus-devel libxcb-devel"
+short_desc="Spotify in the terminal with cover art and notifications (for grim-spotify)"
+maintainer="Grim OS <grimos@localhost>"
+conflicts="spotify-player>=0"
+provides="spotify-player-${version}_${revision}"
+depends="pipewire alsa-pipewire"
+license="MIT"
+homepage="https://github.com/aome510/spotify-player"
+distfiles="https://github.com/aome510/spotify-player/archive/refs/tags/v${version}.tar.gz"
+checksum=60cc7cd60f66729039c0a48b134d8032c14817c88210d420722ad08340ad15cc
+
+post_install() {
+	vlicense LICENSE
+}

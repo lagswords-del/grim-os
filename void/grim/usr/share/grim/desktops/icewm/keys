@@ -1,0 +1,7 @@
+# Grim Void: keys that start programs (window keys are in preferences)
+key "Super+Return"      grim-term
+key "Super+d"           rofi -show drun
+key "Super+e"           pcmanfm
+key "Super+w"           grim-term -e grim-wifi
+key "Super+Shift+e"     icesh logout
+key "Print"             sh -c 'mkdir -p ~/Pictures && maim ~/Pictures/shot-$(date +%s).png'

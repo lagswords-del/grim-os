@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""grimfetch-config: read or change grimfetch's settings in ~/.config/grimfetch/config.toml.
+
+  grimfetch-config get title_color
+  grimfetch-config set title_color "#88c0d0"     (or red, bright_cyan, default ...)
+  grimfetch-config reset title_color
+
+The first change copies /etc/grimfetch.toml there, so your own file keeps every other line.
+"""
+import os, re, shutil, sys
+from pathlib import Path
+
+USER = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "grimfetch" / "config.toml"
+SYSTEM = Path("/etc/grimfetch.toml")
+DEFAULTS = {"title_color": "red", "ascii_color": "white", "text_color": "default"}
+NAMES = "black red green yellow blue magenta cyan white".split()
+
+
+def valid(v):
+    v = v.strip().lower()
+    return v == "default" or re.fullmatch(r"#[0-9a-f]{6}", v) or v in NAMES or (v.startswith("bright_") and v[7:] in NAMES)
+
+
+def read(path):
+    try:
+        return path.read_text()
+    except OSError:
+        return ""
+
+
+def get(key):
+    for text in (read(USER), read(SYSTEM)):
+        m = re.search(rf'^\s*{re.escape(key)}\s*=\s*(?:"([^"\n]*)"|([^\s#]+))', text, re.M)
+        if m:
+            return (m.group(1) if m.group(1) is not None else m.group(2)).strip()
+    return DEFAULTS.get(key, "")
+
+
+def set_(key, value):
+    if key.endswith("_color") and not valid(value):
+        sys.exit(f"grimfetch-config: {value!r} isn't a colour (use a name like red, bright_cyan, default, or #rrggbb)")
+    USER.parent.mkdir(parents=True, exist_ok=True)
+    if not USER.exists():
+        if SYSTEM.exists():
+            shutil.copy(SYSTEM, USER)
+        else:
+            USER.write_text("# grimfetch config\n")
+    text = USER.read_text()
+    line = f'{key} = "{value}"'
+    pat = rf'^(\s*){re.escape(key)}\s*=\s*(?:"[^"\n]*"|[^\s#]+)'
+    if re.search(pat, text, re.M):
+        text = re.sub(pat, lambda m: m.group(1) + line, text, count=1, flags=re.M)
+    else:
+        text = text.rstrip("\n") + "\n" + line + "\n"
+    USER.write_text(text)
+
+
+if __name__ == "__main__":
+    a = sys.argv[1:]
+    if len(a) == 2 and a[0] == "get":
+        print(get(a[1]))
+    elif len(a) == 3 and a[0] == "set":
+        set_(a[1], a[2])
+    elif len(a) == 2 and a[0] == "reset":
+        set_(a[1], DEFAULTS.get(a[1], "default"))
+    else:
+        print(__doc__.strip()); sys.exit(1)

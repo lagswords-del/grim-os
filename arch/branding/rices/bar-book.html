@@ -1,0 +1,352 @@
+<title>Grim Bar Book</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&family=Fira+Code:wght@500;700&family=IBM+Plex+Mono:wght@500;700&family=Space+Mono:wght@400;700&family=Inconsolata:wght@500;700&family=Source+Code+Pro:wght@500;700&family=Victor+Mono:wght@500;700&family=Ubuntu+Mono:wght@400;700&family=VT323&display=swap">
+<style>
+/* Layout: a swatch book of bars. Each card is a wide strip of desktop with the bar drawn on it, then its recipe. */
+:root {
+  --bg: #f3f2ef; --panel: #ffffff; --ink: #16161a; --muted: #67676f; --line: #dddcd7; --accent: #b3101c; --chip: #ecebe7;
+  --display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+  --body: "Inter", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0d0d0f; --panel: #151518; --ink: #ecebe8; --muted: #9a9aa3; --line: #26262b; --accent: #e0303d; --chip: #1d1d21; color-scheme: dark } }
+:root[data-theme="dark"] { --bg: #0d0d0f; --panel: #151518; --ink: #ecebe8; --muted: #9a9aa3; --line: #26262b; --accent: #e0303d; --chip: #1d1d21; color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 28px 64px; }
+main { max-width: 1440px; margin: 0 auto; display: grid; gap: 24px; }
+header { display: grid; gap: 10px; max-width: 900px; }
+.eyebrow { font: 500 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font: 800 clamp(34px, 5.5vw, 60px)/1 var(--display); letter-spacing: -.02em; margin: 0; text-wrap: balance; }
+.lede { color: var(--muted); max-width: 70ch; margin: 0; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 10px; border-bottom: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+.group { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.chipbtn { font: 500 13px var(--body); color: var(--ink); background: var(--chip); border: 1px solid transparent; border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.chipbtn[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.chipbtn:focus-visible, .act:focus-visible, #q:focus-visible, #st:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#q, #st { font: 14px var(--body); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+#q { width: min(220px, 100%); }
+.count { font: 500 12.5px var(--mono); color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 18px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: grid; grid-template-rows: auto 1fr; min-width: 0; }
+.card svg { display: block; width: 100%; height: auto; aspect-ratio: 640 / 150; }
+.info { padding: 12px 14px 14px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.top { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.num { font: 500 11px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.name { font: 700 18px/1.15 var(--display); margin: 0; letter-spacing: -.01em; }
+.tool { margin-left: auto; font: 500 10.5px var(--mono); padding: 2px 7px; border-radius: 4px; background: var(--chip); }
+.desc { margin: 0; color: var(--muted); font-size: 13px; }
+.spec { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px; margin: 0; }
+.spec dt { color: var(--muted); }
+.spec dd { margin: 0; font-family: var(--mono); font-size: 11.5px; overflow-wrap: anywhere; }
+.sw { display: flex; height: 8px; border-radius: 3px; overflow: hidden; border: 1px solid var(--line); }
+.sw i { flex: 1; }
+.acts { display: flex; gap: 6px; }
+.act { font: 500 12.5px var(--body); color: var(--ink); background: var(--chip); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+.act.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.empty { color: var(--muted); padding: 40px 0; text-align: center; }
+footer { color: var(--muted); font-size: 12.5px; }
+code { font: 12px var(--mono); }
+</style>
+
+<main>
+<header>
+  <span class="eyebrow">Grim OS · bars</span>
+  <h1>Grim Bar Book</h1>
+  <p class="lede">Bar designs for Grim OS, each drawn with its real modules: workspaces, clock, volume, Wi-Fi, battery and the rest. The tag on each card says whether Polybar (i3, Openbox, IceWM), Waybar (Sway, Hyprland, Niri) or both can build it. Star the ones you want, copy the shortlist and paste it to Claude.</p>
+</header>
+
+<div class="bar" role="toolbar" aria-label="Filters">
+  <input id="q" type="search" placeholder="Search bars" aria-label="Search bars">
+  <div class="group" id="tf" aria-label="Bar program">
+    <button class="chipbtn" data-t="" aria-pressed="true">All</button>
+    <button class="chipbtn" data-t="p" aria-pressed="false">Polybar</button>
+    <button class="chipbtn" data-t="w" aria-pressed="false">Waybar</button>
+  </div>
+  <select id="st" aria-label="Style"><option value="">Every style</option></select>
+  <div class="group">
+    <button class="chipbtn" id="starsonly" aria-pressed="false">★ Shortlist only</button>
+    <button class="chipbtn" id="copylist" aria-pressed="false">Copy shortlist</button>
+  </div>
+  <span class="count" id="count"></span>
+</div>
+
+<div class="grid" id="grid"></div>
+<p class="empty" id="empty" hidden>No bar matches these filters.</p>
+<footer>Source: <code>grimos/branding/rices/bars.py</code> and <code>barbook.py</code>.</footer>
+</main>
+
+<script>
+const DATA = {"palettes":{"grim":["#0b0b0c","#17171a","#e6e6e6","#77777d","#c1121f","#e05561","#ffffff"],"bone":["#ecebe6","#dcdad2","#161616","#6b6a66","#161616","#c1121f","#8a8780"],"nordsnow":["#2e3440","#3b4252","#d8dee9","#7b88a1","#88c0d0","#b48ead","#81a1c1"],"nordlight":["#eceff4","#dde3ec","#2e3440","#7b88a1","#5e81ac","#bf616a","#88c0d0"],"gruv":["#282828","#3c3836","#ebdbb2","#a89984","#fabd2f","#fb4934","#b8bb26"],"gruvlight":["#fbf1c7","#ebdbb2","#3c3836","#7c6f64","#d65d0e","#9d0006","#79740e"],"mocha":["#1e1e2e","#313244","#cdd6f4","#7f849c","#cba6f7","#f38ba8","#89b4fa"],"latte":["#eff1f5","#ccd0da","#4c4f69","#8c8fa1","#8839ef","#d20f39","#1e66f5"],"frappe":["#303446","#414559","#c6d0f5","#838ba7","#8caaee","#e78284","#a6d189"],"macchiato":["#24273a","#363a4f","#cad3f5","#8087a2","#f5bde6","#ed8796","#8bd5ca"],"dracula":["#282a36","#44475a","#f8f8f2","#6272a4","#bd93f9","#ff79c6","#50fa7b"],"tokyo":["#1a1b26","#24283b","#c0caf5","#565f89","#7aa2f7","#bb9af7","#9ece6a"],"tokyostorm":["#24283b","#2f3549","#a9b1d6","#565f89","#7dcfff","#f7768e","#e0af68"],"tokyoday":["#e1e2e7","#d0d5e3","#3760bf","#848cb5","#2e7de9","#9854f1","#587539"],"rosepine":["#191724","#26233a","#e0def4","#6e6a86","#ebbcba","#c4a7e7","#31748f"],"rosemoon":["#232136","#393552","#e0def4","#6e6a86","#ea9a97","#c4a7e7","#3e8fb0"],"rosedawn":["#faf4ed","#f2e9e1","#575279","#9893a5","#d7827e","#907aa9","#286983"],"everforest":["#2d353b","#3d484d","#d3c6aa","#859289","#a7c080","#e69875","#7fbbb3"],"everlight":["#fdf6e3","#efebd4","#5c6a72","#939f91","#8da101","#f57d26","#3a94c5"],"kanagawa":["#1f1f28","#2a2a37","#dcd7ba","#727169","#7e9cd8","#c34043","#98bb6c"],"kanadragon":["#181616","#282727","#c5c9c5","#737c73","#c4746e","#8ba4b0","#87a987"],"kanalotus":["#f2ecbc","#e7dba0","#545464","#8a8980","#4d699b","#c84053","#6f894e"],"soldark":["#002b36","#073642","#93a1a1","#586e75","#268bd2","#d33682","#859900"],"sollight":["#fdf6e3","#eee8d5","#586e75","#93a1a1","#268bd2","#cb4b16","#859900"],"onedark":["#282c34","#353b45","#abb2bf","#5c6370","#61afef","#e06c75","#98c379"],"ayudark":["#0b0e14","#131721","#bfbdb6","#565b66","#e6b450","#f07178","#7fd962"],"ayumirage":["#1f2430","#242936","#cccac2","#707a8c","#ffcc66","#f28779","#87d96c"],"ayulight":["#fcfcfc","#eef0f2","#5c6166","#8a9199","#fa8d3e","#f07171","#86b300"],"monokai":["#272822","#3e3d32","#f8f8f2","#75715e","#f92672","#66d9ef","#a6e22e"],"material":["#263238","#2e3c43","#eeffff","#546e7a","#82aaff","#f07178","#c3e88d"],"oxocarbon":["#161616","#262626","#f2f4f8","#6f6f6f","#ff7eb6","#33b1ff","#42be65"],"nightfox":["#192330","#29394f","#cdcecf","#71839b","#719cd6","#c94f6d","#81b29a"],"dawnfox":["#faf4ed","#ebe5df","#575279","#9893a5","#286983","#b4637a","#618774"],"carbonfox":["#161616","#252525","#f2f4f8","#6e6f70","#78a9ff","#ee5396","#25be6a"],"sonokai":["#2c2e34","#33353f","#e2e2e3","#7f8490","#76cce0","#fc5d7c","#9ed072"],"edge":["#2c2e34","#363944","#c5cdd9","#7f8490","#6cb6eb","#ec7279","#a0c980"],"melange":["#292522","#34302c","#ece1d7","#867462","#e49b5d","#bd8183","#78997a"],"zenburn":["#3f3f3f","#4f4f4f","#dcdccc","#7f9f7f","#f0dfaf","#cc9393","#8fb28f"],"horizon":["#1c1e26","#232530","#d5d8da","#6c6f93","#e95678","#fab795","#29d398"],"palenight":["#292d3e","#34324a","#a6accd","#676e95","#c792ea","#ff5370","#c3e88d"],"ghdark":["#0d1117","#161b22","#c9d1d9","#8b949e","#58a6ff","#f78166","#3fb950"],"ghlight":["#ffffff","#f0f2f5","#24292f","#6e7781","#0969da","#cf222e","#1a7f37"],"moonfly":["#080808","#1c1c1c","#bdbdbd","#808080","#80a0ff","#ff5454","#8cc85f"],"nightowl":["#011627","#0b2942","#d6deeb","#637777","#82aaff","#c792ea","#addb67"],"synthwave":["#241b2f","#34294f","#f0eff1","#848bbd","#ff7edb","#36f9f6","#fede5d"],"cyberpunk":["#000b1e","#0a1a3a","#0abdc6","#3a5f8a","#ea00d9","#711c91","#00ff9f"],"matrix":["#000000","#0a120a","#b6ffb6","#2e6b2e","#00ff41","#008f11","#d1ffd1"],"amber":["#140e00","#241900","#ffb000","#8a5f00","#ffcc00","#ff6a00","#ffe9a6"],"sakura":["#fff5f7","#fde2e7","#5a3d47","#a07b88","#e86a92","#c94f7c","#7aa37a"],"matcha":["#1e2420","#2a322c","#d6e2d1","#7f8f80","#9cc49b","#e3c07a","#7fb3a8"],"coffee":["#1b1512","#2a211c","#e8d9c8","#8c7a6b","#c69c6d","#a6644b","#8fa37c"],"ocean":["#0f1c2e","#162a43","#cfe3f2","#6b86a0","#4fb3d9","#f28c6b","#7bd6b0"],"forestnight":["#101a14","#18261d","#d5e4d0","#6f8a74","#7fc87a","#d9a45b","#5fa8a0"],"desert":["#2a1f1d","#3a2b27","#f2dccb","#9c7e6e","#f4a261","#e76f51","#2a9d8f"],"arctic":["#f5f9fc","#e3ecf3","#1d2b36","#6b7f8e","#2b7bb9","#d1495b","#4c9a6a"],"lavender":["#1f1b2e","#2b2540","#e5def7","#8a80a8","#b79cf2","#f29cc4","#8ce0d0"],"crimson":["#120708","#1f0d0f","#f1dcdc","#8a6667","#e0243b","#ff8a5c","#f2f2f2"],"slate":["#1e2227","#2a2f36","#d0d6de","#7a838e","#a3b8cc","#e8a87c","#9fc5a8"],"mono":["#101010","#1c1c1c","#e0e0e0","#6a6a6a","#ffffff","#bdbdbd","#8a8a8a"],"monolight":["#f2f2f2","#e2e2e2","#111111","#777777","#111111","#555555","#999999"],"vapor":["#1d1135","#2e1a52","#f7e7ff","#9b85c7","#ff71ce","#01cdfe","#05ffa1"],"classic":["#008080","#c0c0c0","#000000","#808080","#000080","#ffffff","#808080"],"hacker":["#0a0e14","#10161f","#a8c7fa","#4a5d78","#00b4ff","#ff3860","#23d18b"],"autumn":["#1d1611","#2b211a","#efdcc4","#94806b","#d97b3a","#b8432f","#c9a24a"],"mint":["#f4fbf7","#e1f2e8","#1f3a2e","#6b8a7a","#2e9e6e","#d95f5f","#3b7fc4"],"sunset":["#1e1424","#2d1d35","#f6e4f0","#9d7fa8","#ff8c61","#ff5e8f","#ffd166"],"aurora":["#0b1120","#121a30","#dbe6ff","#7083a8","#6ee7b7","#a78bfa","#60a5fa"],"ink":["#0d1021","#171b33","#e2e4f0","#6b7194","#e2e4f0","#ff6b6b","#7aa2ff"],"peach":["#fff4ec","#ffe3d1","#4a2f27","#a3847a","#ff7a59","#e04f5f","#4f9d8e"],"teal":["#0c1f1f","#123030","#d3eeea","#5f8a86","#2ec4b6","#ff9f1c","#cbf3f0"],"plum":["#1b0f1e","#2a1830","#efdcf2","#8f7096","#d16ba5","#86a8e7","#5ffbf1"],"steel":["#14181d","#1e242b","#c8d0d8","#66717d","#5b8def","#f2c14e","#4fc1a6"],"olive":["#1c1d14","#2a2c1e","#e3e2c8","#8a8a6a","#b5b84a","#d9853b","#7a9a6a"],"glacier":["#0e1a24","#16283a","#e6f4ff","#7c97ad","#9be7ff","#ff9bb3","#c3f584"]},"fonts":{"jbm":"JetBrains Mono","fira":"Fira Code","plex":"IBM Plex Mono","space":"Space Mono","incon":"Inconsolata","scp":"Source Code Pro","victor":"Victor Mono","ubuntu":"Ubuntu Mono","term":"Terminus"},"tools":{"p":"Polybar","w":"Waybar","pw":"Polybar or Waybar"},"bars":[{"n":1,"name":"Grim Strip","tool":"pw","style":"full","pal":"grim","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["vol","net","bat","power"],"font":"incon","desc":"The Grim default: one black strip, red active workspace, red power button."},{"n":2,"name":"Reaper Pills","tool":"pw","style":"pills","pal":"grim","pos":"t","h":28,"ws":"dots","left":["launcher","ws"],"center":["clock"],"right":["vol","net","bat","power"],"font":"jbm","desc":"Three floating black pills with a red reaper launcher."},{"n":3,"name":"Red Island","tool":"pw","style":"island","pal":"crimson","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","bat"],"font":"space","desc":"Everything in one centred red-black island."},{"n":4,"name":"Bone Line","tool":"pw","style":"underline","pal":"bone","pos":"t","h":26,"ws":"num","left":["ws"],"center":["date","clock"],"right":["cpu","mem","vol","bat"],"font":"plex","desc":"Paper white with thin coloured underlines, red for the active workspace."},{"n":5,"name":"Nord Snow Bar","tool":"p","style":"full","pal":"nordsnow","pos":"t","h":26,"ws":"num","left":["ws","vol","kb"],"center":["date","clock"],"right":["net","disk","temp","mem","bat","power"],"font":"incon","desc":"The bar from your i3 screenshot: cyan date block, dB volume, IP, disk and temperature."},{"n":6,"name":"Nord Pills","tool":"pw","style":"pills","pal":"nordsnow","pos":"t","h":28,"ws":"num","left":["ws"],"center":["clock"],"right":["vol","net","bat"],"font":"jbm","desc":"Nord frost in three rounded groups."},{"n":7,"name":"Frost Glass","tool":"w","style":"glass","pal":"nordsnow","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","net","bat","power"],"font":"jbm","desc":"A see-through Nord bar with a hairline cyan border."},{"n":8,"name":"CachyOS Minimal","tool":"pw","style":"icons","pal":"nordsnow","pos":"t","h":31,"ws":"num","left":["launcher","ws"],"center":["clock"],"right":["vol","net","bat","updates","power"],"font":"incon","desc":"Your current CachyOS bar: launcher, workspace pill, bold clock, icons only."},{"n":9,"name":"Gruvbox Powerline","tool":"pw","style":"powerline","pal":"gruv","pos":"t","h":24,"ws":"num","left":["ws","title"],"center":[],"right":["cpu","mem","vol","bat","clock"],"font":"jbm","desc":"Classic powerline arrows in Gruvbox yellow, red and green."},{"n":10,"name":"Campfire Blocks","tool":"pw","style":"blocks","pal":"gruv","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","temp","bat"],"font":"term","desc":"Chunky flat Gruvbox blocks with gaps and a bitmap font."},{"n":11,"name":"Hay Underline","tool":"pw","style":"underline","pal":"gruvlight","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["vol","net","bat"],"font":"plex","desc":"Gruvbox light with orange underlines."},{"n":12,"name":"Mocha Bubbles","tool":"pw","style":"bubbles","pal":"mocha","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","net","bat","power"],"font":"jbm","desc":"Catppuccin Mocha: every module in its own soft bubble."},{"n":13,"name":"Latte Island","tool":"pw","style":"island","pal":"latte","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","bat"],"font":"plex","desc":"Catppuccin Latte in one airy island."},{"n":14,"name":"Frappé Roundline","tool":"pw","style":"roundline","pal":"frappe","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","vol","bat"],"font":"fira","desc":"Rounded segment caps in Frappé pastels."},{"n":15,"name":"Macchiato Split","tool":"w","style":"split","pal":"macchiato","pos":"t","h":28,"ws":"num","left":["ws","title"],"center":[],"right":["clock","vol","net","bat"],"font":"victor","desc":"Two floating groups, nothing in the middle."},{"n":16,"name":"Dracula Powerline","tool":"pw","style":"powerline","pal":"dracula","pos":"t","h":24,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","vol","bat"],"font":"fira","desc":"Purple and pink arrows on Dracula grey."},{"n":17,"name":"Vampire Notch","tool":"pw","style":"notch","pal":"dracula","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["vol","net","bat"],"font":"jbm","desc":"A clock notch hangs from the middle like a phone camera cut-out."},{"n":18,"name":"Tokyo Pills","tool":"pw","style":"pills","pal":"tokyo","pos":"t","h":28,"ws":"kanji","left":["ws"],"center":["clock"],"right":["vol","net","bat"],"font":"jbm","desc":"Tokyo Night with kanji workspaces: 一 二 三 四 五."},{"n":19,"name":"Tokyo Overline","tool":"pw","style":"overline","pal":"tokyostorm","pos":"t","h":26,"ws":"num","left":["ws"],"center":["date"],"right":["cpu","mem","vol","bat","clock"],"font":"fira","desc":"Coloured lines above each module, storm blue."},{"n":20,"name":"Neon Gradient","tool":"w","style":"gradient","pal":"tokyo","pos":"t","h":28,"ws":"num","left":["ws"],"center":["clock"],"right":["vol","net","bat"],"font":"space","desc":"A blue-to-violet gradient background (Waybar CSS)."},{"n":21,"name":"Rosé Bubbles","tool":"pw","style":"bubbles","pal":"rosepine","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["media","vol","bat"],"font":"victor","desc":"Rosé Pine bubbles with a now-playing module."},{"n":22,"name":"Dawn Plain","tool":"pw","style":"plain","pal":"rosedawn","pos":"t","h":24,"ws":"words","left":["ws"],"center":["date"],"right":["vol","bat","clock"],"font":"plex","desc":"Text only, separated by dots. Rosé Dawn parchment."},{"n":23,"name":"Moon Island","tool":"pw","style":"island","pal":"rosemoon","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["weather","vol"],"font":"victor","desc":"One pill with the weather and the moon colours."},{"n":24,"name":"Forest Brackets","tool":"pw","style":"brackets","pal":"everforest","pos":"t","h":24,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","bat"],"font":"jbm","desc":"[ terminal ] brackets in Everforest green."},{"n":25,"name":"Moss Side","tool":"w","style":"side","pal":"everforest","pos":"t","h":30,"ws":"dots","left":["ws"],"center":[],"right":["clock","vol","bat","power"],"font":"jbm","desc":"A vertical Everforest bar on the left."},{"n":26,"name":"Clearing Underline","tool":"pw","style":"underline","pal":"everlight","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["vol","net","bat"],"font":"plex","desc":"Everforest light with green underlines."},{"n":27,"name":"Wave Roundline","tool":"pw","style":"roundline","pal":"kanagawa","pos":"t","h":26,"ws":"kanji","left":["ws"],"center":["clock"],"right":["cpu","mem","vol","bat"],"font":"jbm","desc":"Kanagawa ink-blue with rounded caps and kanji."},{"n":28,"name":"Dragon Tabs","tool":"pw","style":"tabs","pal":"kanadragon","pos":"t","h":26,"ws":"num","left":["ws"],"center":["title"],"right":["clock","vol","bat"],"font":"plex","desc":"Folder-tab workspaces in muted Kanagawa Dragon."},{"n":29,"name":"Lotus Glass","tool":"w","style":"glass","pal":"kanalotus","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","bat"],"font":"plex","desc":"See-through rice-paper bar with an indigo hairline."},{"n":30,"name":"Solar Full","tool":"pw","style":"full","pal":"soldark","pos":"t","h":24,"ws":"num","left":["ws","title"],"center":[],"right":["cpu","mem","vol","bat","clock"],"font":"scp","desc":"Solarized dark, classic and dense."},{"n":31,"name":"Solar Double","tool":"pw","style":"double","pal":"sollight","pos":"t","h":24,"ws":"num","left":["ws","title"],"center":["clock"],"right":["cpu","mem","vol","net","bat"],"font":"scp","desc":"Two bars: info on top, workspaces and title at the bottom."},{"n":32,"name":"Atom Bubbles","tool":"pw","style":"bubbles","pal":"onedark","pos":"t","h":28,"ws":"num","left":["ws"],"center":["clock"],"right":["vol","net","bat","power"],"font":"jbm","desc":"One Dark in round bubbles."},{"n":33,"name":"Ayu Outline","tool":"w","style":"outline","pal":"ayudark","pos":"t","h":28,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","vol","bat"],"font":"jbm","desc":"Every module as an amber outline on black (Waybar borders)."},{"n":34,"name":"Mirage Notch","tool":"pw","style":"notch","pal":"ayumirage","pos":"t","h":26,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","bat"],"font":"fira","desc":"Ayu Mirage with a warm clock notch."},{"n":35,"name":"Monokai Blocks","tool":"pw","style":"blocks","pal":"monokai","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","vol","bat"],"font":"space","desc":"Monokai's hot pink, cyan and green as flat blocks."},{"n":36,"name":"Material Pills","tool":"pw","style":"pills","pal":"material","pos":"t","h":28,"ws":"num","left":["ws"],"center":["clock"],"right":["vol","net","bat"],"font":"jbm","desc":"Material blue-grey pills."},{"n":37,"name":"Carbon Underline","tool":"pw","style":"underline","pal":"oxocarbon","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","vol","bat"],"font":"plex","desc":"IBM Carbon pink and cyan underlines."},{"n":38,"name":"Fox Corners","tool":"pw","style":"corners","pal":"nightfox","pos":"t","h":26,"ws":"num","left":["ws"],"center":[],"right":["vol","net","bat","clock"],"font":"fira","desc":"Tabs in the two top corners, Nightfox blue."},{"n":39,"name":"Sonokai Roundline","tool":"pw","style":"roundline","pal":"sonokai","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["vol","bat"],"font":"fira","desc":"Candy-coloured rounded caps."},{"n":40,"name":"Melange Plain","tool":"pw","style":"plain","pal":"melange","pos":"t","h":24,"ws":"words","left":["ws"],"center":["date","clock"],"right":["vol","bat"],"font":"victor","desc":"Warm brown text only, like a library index card."},{"n":41,"name":"Horizon Gradient","tool":"w","style":"gradient","pal":"horizon","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","bat"],"font":"fira","desc":"Coral-to-amber sunset gradient (Waybar CSS)."},{"n":42,"name":"Palenight Island","tool":"pw","style":"island","pal":"palenight","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","bat"],"font":"victor","desc":"Lavender island with a soft glow."},{"n":43,"name":"GitHub Full","tool":"pw","style":"full","pal":"ghdark","pos":"t","h":26,"ws":"num","left":["ws","title"],"center":[],"right":["vol","net","bat","clock"],"font":"jbm","desc":"GitHub dark: crisp, grey borders, blue accent."},{"n":44,"name":"GitHub Light Split","tool":"w","style":"split","pal":"ghlight","pos":"t","h":28,"ws":"num","left":["ws"],"center":[],"right":["clock","vol","net","bat"],"font":"plex","desc":"GitHub light in two white groups."},{"n":45,"name":"Moonfly Icons","tool":"pw","style":"icons","pal":"moonfly","pos":"t","h":26,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","net","bat","power"],"font":"jbm","desc":"Pure black, icons only, one blue dot for the workspace."},{"n":46,"name":"Owl Overline","tool":"pw","style":"overline","pal":"nightowl","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","vol","bat"],"font":"fira","desc":"Night Owl blue with coloured overlines."},{"n":47,"name":"Outrun Powerline","tool":"pw","style":"powerline","pal":"synthwave","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["media","vol","bat"],"font":"space","desc":"Synthwave pink and cyan arrows."},{"n":48,"name":"Netrunner Brackets","tool":"pw","style":"brackets","pal":"cyberpunk","pos":"t","h":24,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","net","bat"],"font":"jbm","desc":"[ cyan ] [ magenta ] brackets like a hacking HUD."},{"n":49,"name":"Matrix Plain","tool":"pw","style":"plain","pal":"matrix","pos":"t","h":22,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","net"],"font":"term","desc":"Green text on black, nothing else."},{"n":50,"name":"Amber Brackets","tool":"pw","style":"brackets","pal":"amber","pos":"t","h":24,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","bat"],"font":"term","desc":"Amber phosphor brackets with a bitmap font."},{"n":51,"name":"Sakura Bubbles","tool":"pw","style":"bubbles","pal":"sakura","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["media","vol","bat"],"font":"victor","desc":"Cherry-blossom bubbles on white."},{"n":52,"name":"Matcha Island","tool":"pw","style":"island","pal":"matcha","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["weather","vol","bat"],"font":"plex","desc":"A green-tea island with the weather."},{"n":53,"name":"Espresso Tabs","tool":"pw","style":"tabs","pal":"coffee","pos":"t","h":26,"ws":"num","left":["ws"],"center":["title"],"right":["clock","vol","bat"],"font":"space","desc":"Coffee-brown folder tabs."},{"n":54,"name":"Deep Sea Glass","tool":"w","style":"glass","pal":"ocean","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","net","bat"],"font":"jbm","desc":"See-through navy with a coral hairline."},{"n":55,"name":"Desert Blocks","tool":"pw","style":"blocks","pal":"desert","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["weather","vol","bat"],"font":"space","desc":"Sandstone and teal flat blocks."},{"n":56,"name":"Arctic Underline","tool":"pw","style":"underline","pal":"arctic","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["vol","net","bat"],"font":"plex","desc":"Ice white with glacier-blue underlines."},{"n":57,"name":"Lavender Bubbles","tool":"pw","style":"bubbles","pal":"lavender","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["media","vol","bat"],"font":"victor","desc":"Soft violet bubbles."},{"n":58,"name":"Blood Moon Notch","tool":"pw","style":"notch","pal":"crimson","pos":"t","h":26,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","bat"],"font":"jbm","desc":"A red notch with the time, black everywhere else."},{"n":59,"name":"Slate Double","tool":"pw","style":"double","pal":"slate","pos":"t","h":24,"ws":"num","left":["ws","title"],"center":["clock"],"right":["cpu","mem","vol","bat"],"font":"plex","desc":"Slate grey: two thin bars, info above, windows below."},{"n":60,"name":"Vapor Gradient","tool":"w","style":"gradient","pal":"vapor","pos":"t","h":28,"ws":"roman","left":["ws"],"center":["clock"],"right":["media","vol"],"font":"space","desc":"Aesthetic pink-to-cyan with Roman numerals."},{"n":61,"name":"Classic Taskstrip","tool":"pw","style":"full","pal":"classic","pos":"b","h":28,"ws":"num","left":["launcher","ws","title"],"center":[],"right":["tray","clock"],"font":"term","desc":"The 95 look at the bottom: a start button, tasks and a clock."},{"n":62,"name":"Hacker Overline","tool":"pw","style":"overline","pal":"hacker","pos":"t","h":24,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","net","bat"],"font":"jbm","desc":"Electric-blue overlines on near-black."},{"n":63,"name":"Autumn Roundline","tool":"pw","style":"roundline","pal":"autumn","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["weather","vol","bat"],"font":"space","desc":"Rust and amber with rounded caps."},{"n":64,"name":"Mint Pills","tool":"pw","style":"pills","pal":"mint","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","net","bat"],"font":"plex","desc":"Fresh mint pills on white."},{"n":65,"name":"Sunset Split","tool":"w","style":"split","pal":"sunset","pos":"t","h":28,"ws":"num","left":["ws"],"center":[],"right":["clock","vol","bat","power"],"font":"space","desc":"Two sunset-coloured groups."},{"n":66,"name":"Aurora Side","tool":"w","style":"side","pal":"aurora","pos":"t","h":30,"ws":"dots","left":["ws"],"center":[],"right":["clock","vol","bat","power"],"font":"jbm","desc":"A vertical bar glowing green and violet."},{"n":67,"name":"Peach Bubbles","tool":"pw","style":"bubbles","pal":"peach","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","bat"],"font":"victor","desc":"Peach and coral bubbles."},{"n":68,"name":"Teal Corners","tool":"pw","style":"corners","pal":"teal","pos":"t","h":26,"ws":"num","left":["ws"],"center":[],"right":["vol","bat","clock"],"font":"fira","desc":"Teal corner tabs with an orange accent."},{"n":69,"name":"Plum Glass","tool":"w","style":"glass","pal":"plum","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","bat"],"font":"victor","desc":"See-through plum with a pink hairline."},{"n":70,"name":"Steel Full","tool":"pw","style":"full","pal":"steel","pos":"b","h":26,"ws":"num","left":["ws","title"],"center":[],"right":["cpu","mem","disk","temp","clock"],"font":"plex","desc":"Industrial: every number you want, at the bottom."},{"n":71,"name":"Olive Brackets","tool":"pw","style":"brackets","pal":"olive","pos":"t","h":24,"ws":"num","left":["ws"],"center":["clock"],"right":["cpu","mem","bat"],"font":"term","desc":"Military olive in brackets."},{"n":72,"name":"Glacier Island","tool":"pw","style":"island","pal":"glacier","pos":"t","h":28,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","bat"],"font":"jbm","desc":"Glacier blue island."},{"n":73,"name":"Graphite Icons","tool":"pw","style":"icons","pal":"mono","pos":"t","h":26,"ws":"dots","left":["launcher","ws"],"center":["clock"],"right":["vol","net","bat","power"],"font":"jbm","desc":"Monochrome icons only. White for active, grey for the rest."},{"n":74,"name":"Newsprint Full","tool":"pw","style":"full","pal":"monolight","pos":"t","h":24,"ws":"num","left":["ws","title"],"center":[],"right":["vol","bat","date","clock"],"font":"plex","desc":"Black on white with hairline separators."},{"n":75,"name":"Ink Underline","tool":"pw","style":"underline","pal":"ink","pos":"t","h":26,"ws":"num","left":["ws"],"center":["clock"],"right":["vol","bat"],"font":"jbm","desc":"Blue-black ink with one red underline."},{"n":76,"name":"Scythe Notch","tool":"pw","style":"notch","pal":"grim","pos":"t","h":26,"ws":"dots","left":["ws"],"center":["clock"],"right":["vol","bat","power"],"font":"victor","desc":"Grim black with a red clock notch."},{"n":77,"name":"Crypt Side","tool":"w","style":"side","pal":"grim","pos":"t","h":30,"ws":"dots","left":["ws"],"center":[],"right":["clock","vol","bat","power"],"font":"scp","desc":"A vertical black bar with red workspaces."},{"n":78,"name":"Requiem Double","tool":"pw","style":"double","pal":"grim","pos":"t","h":24,"ws":"num","left":["ws","title"],"center":["clock"],"right":["cpu","mem","vol","bat","power"],"font":"scp","desc":"Two black bars with red details."}]};
+const STYLE_NAME = { full: "Full strip", pills: "Pills", island: "Island", split: "Split", powerline: "Powerline", roundline: "Rounded segments",
+  underline: "Underline", overline: "Overline", bubbles: "Bubbles", plain: "Plain text", icons: "Icons only", brackets: "Brackets", tabs: "Folder tabs",
+  glass: "Glass", outline: "Outline", blocks: "Blocks", notch: "Notch", corners: "Corner tabs", double: "Two bars", side: "Vertical", gradient: "Gradient" };
+const FONT = { jbm: "'JetBrains Mono'", fira: "'Fira Code'", plex: "'IBM Plex Mono'", space: "'Space Mono'", incon: "Inconsolata",
+  scp: "'Source Code Pro'", victor: "'Victor Mono'", ubuntu: "'Ubuntu Mono'", term: "VT323" };
+const hex2 = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const mix = (a, b, t) => { const x = hex2(a), y = hex2(b); return "#" + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, "0")).join(""); };
+const lum = h => { const [r, g, b] = hex2(h); return (0.299 * r + 0.587 * g + 0.114 * b) / 255; };
+const on = c => lum(c) > .55 ? "#141414" : "#ffffff";
+
+// ---------------------------------------------------------------- module content
+const TEXT = { title: "nvim · grim-rice", clock: "21:04", date: "Tue 18 Nov", cpu: "12%", mem: "3.1G", vol: "64%", net: "home",
+  bat: "83%", updates: "4", media: "Lo-fi radio", weather: "4°", kb: "us", disk: "41%", temp: "52°", power: "", tray: "", launcher: "" };
+const ICON = {
+  vol: c => `<path d="M0 3.5H2.5L5.5 1V9L2.5 6.5H0Z" fill="${c}"/><path d="M7 3Q9 5 7 7" stroke="${c}" fill="none" stroke-width="1"/>`,
+  net: c => `<path d="M1 4Q5 0 9 4M2.6 5.7Q5 3.4 7.4 5.7" stroke="${c}" fill="none" stroke-width="1.1" stroke-linecap="round"/><circle cx="5" cy="7.8" r="1.1" fill="${c}"/>`,
+  bat: c => `<rect x=".5" y="2.5" width="8" height="5" rx="1" stroke="${c}" fill="none" stroke-width="1"/><rect x="1.6" y="3.6" width="5" height="2.8" fill="${c}"/><rect x="8.6" y="4" width="1" height="2" fill="${c}"/>`,
+  cpu: c => `<rect x="2" y="2" width="6" height="6" rx=".8" stroke="${c}" fill="none" stroke-width="1"/><rect x="3.8" y="3.8" width="2.4" height="2.4" fill="${c}"/><path d="M3.5 0V2M6.5 0V2M3.5 8V10M6.5 8V10M0 3.5H2M0 6.5H2M8 3.5H10M8 6.5H10" stroke="${c}" stroke-width=".8"/>`,
+  mem: c => `<rect x=".5" y="3" width="9" height="4.5" rx=".6" stroke="${c}" fill="none" stroke-width="1"/><path d="M3 4.4V6M5 4.4V6M7 4.4V6M2 7.5V9M8 7.5V9" stroke="${c}" stroke-width=".9"/>`,
+  power: c => `<path d="M2.8 2.8A3.8 3.8 0 1 0 7.2 2.8" stroke="${c}" fill="none" stroke-width="1.3" stroke-linecap="round"/><path d="M5 .6V4.6" stroke="${c}" stroke-width="1.3" stroke-linecap="round"/>`,
+  updates: c => `<path d="M5 .8V6.8M2.3 4.2L5 7L7.7 4.2" stroke="${c}" fill="none" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M1.5 9H8.5" stroke="${c}" stroke-width="1.2" stroke-linecap="round"/>`,
+  media: c => `<circle cx="3" cy="7.6" r="1.9" fill="${c}"/><path d="M4.8 7.6V1L8.6 2.2V3.9L4.8 2.7" stroke="${c}" fill="${c}" stroke-width=".8"/>`,
+  weather: c => `<circle cx="5" cy="5" r="2.2" fill="${c}"/><path d="M5 .3V1.6M5 8.4V9.7M.3 5H1.6M8.4 5H9.7M1.7 1.7L2.6 2.6M7.4 7.4L8.3 8.3M1.7 8.3L2.6 7.4M7.4 2.6L8.3 1.7" stroke="${c}" stroke-width=".9" stroke-linecap="round"/>`,
+  temp: c => `<path d="M5 1V6" stroke="${c}" stroke-width="2" stroke-linecap="round"/><circle cx="5" cy="7.6" r="1.9" fill="${c}"/>`,
+  disk: c => `<circle cx="5" cy="5" r="4" stroke="${c}" fill="none" stroke-width="1"/><circle cx="5" cy="5" r="1.1" fill="${c}"/>`,
+  kb: c => `<rect x=".5" y="2.2" width="9" height="5.6" rx=".8" stroke="${c}" fill="none" stroke-width="1"/><path d="M2.2 4H3.2M4.5 4H5.5M6.8 4H7.8M3 6H7" stroke="${c}" stroke-width=".9"/>`,
+  tray: c => `<rect x="0" y="3.5" width="2.6" height="2.6" rx=".6" fill="${c}"/><rect x="3.7" y="3.5" width="2.6" height="2.6" rx=".6" fill="${c}" opacity=".7"/><rect x="7.4" y="3.5" width="2.6" height="2.6" rx=".6" fill="${c}" opacity=".45"/>`,
+  launcher: c => `<path d="M5 .4C2.4 .9 1.6 3.4 1.6 5.6L.6 9.6H9.4L8.4 5.6C8.4 3.2 7.4 .9 5 .4Z" fill="${c}"/><path d="M3.8 4.4H6.2" stroke="${c === "#ffffff" ? "#000" : "#000"}" stroke-width=".9" opacity=".55"/>`,
+};
+
+function render(b) {
+  const [bg, sf, fg, mu, ac, a2, a3] = DATA.palettes[b.pal];
+  const P = { bg, sf, fg, mu, ac, a2, a3 };
+  const W = 640, H = 150, light = lum(bg) > .5;
+  const font = FONT[b.font] + ", monospace";
+  const h = b.h * 1.15, fs = h * .42, s = fs / 9;
+  const cycle = [ac, a2, a3, mix(ac, a2, .5)];
+  const o = [];
+  const id = "b" + b.n;
+
+  // backdrop: wallpaper blur + a window
+  o.push(`<defs><filter id="f${id}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="30"/></filter>
+    <linearGradient id="g${id}" x1="0" x2="1"><stop offset="0" stop-color="${ac}"/><stop offset="1" stop-color="${a2}"/></linearGradient></defs>
+    <rect width="${W}" height="${H}" fill="${bg}"/><g filter="url(#f${id})" opacity="${light ? .45 : .55}"><circle cx="120" cy="40" r="90" fill="${ac}"/><circle cx="520" cy="110" r="100" fill="${a2}"/><circle cx="330" cy="150" r="70" fill="${a3}"/></g>
+    <rect width="${W}" height="${H}" fill="${bg}" opacity=".25"/>`);
+  const side = b.style === "side";
+  const wy = b.pos === "b" ? 14 : (b.style === "double" ? h + 14 : h + 22), wx = side ? h + 26 : 40;
+  o.push(`<rect x="${wx}" y="${wy}" width="${W - wx - 40}" height="${H}" rx="8" fill="${light ? mix(bg, "#ffffff", .5) : mix(bg, "#000000", .25)}" opacity=".92" stroke="${mix(bg, fg, .15)}"/>`);
+  for (let k = 0; k < 5; k++) o.push(`<rect x="${wx + 16}" y="${wy + 16 + k * 11}" width="${[120, 210, 160, 90, 180][k]}" height="4" rx="2" fill="${[ac, fg, mu, a2, fg][k]}" opacity="${k === 0 ? .9 : .45}"/>`);
+
+  // ---- measure + draw items
+  const tw = t => t.length * fs * .62;
+  const iconOnly = b.style === "icons";
+  const wsLabels = { num: ["1", "2", "3", "4", "5"], dots: ["", "", "", "", ""], roman: ["I", "II", "III", "IV", "V"],
+    kanji: ["一", "二", "三", "四", "五"], bars: ["", "", "", "", ""], words: ["web", "code", "chat", "music", "misc"] }[b.ws] || ["1", "2", "3", "4", "5"];
+  const items = mods => mods.map(m => {
+    if (m === "ws") {
+      const each = b.ws === "dots" ? fs * .95 : b.ws === "bars" ? fs * .7 : b.ws === "words" ? 0 : fs * 1.55;
+      const w = b.ws === "words" ? wsLabels.reduce((a, l) => a + tw(l) + fs * .8, 0) : each * 5;
+      return { m, w };
+    }
+    const text = iconOnly && !["clock", "title"].includes(m) ? "" : TEXT[m];
+    const hasIcon = !!ICON[m];
+    const w = (hasIcon ? 10 * s : 0) + (text ? (hasIcon ? fs * .4 : 0) + tw(text) : 0);
+    return { m, w, text, hasIcon };
+  });
+  const drawWs = (x, cy, txt, opts = {}) => {
+    const r = [];
+    let xx = x;
+    wsLabels.forEach((l, k) => {
+      const act = k === 0, occ = k === 2;
+      if (b.ws === "dots") { r.push(`<circle cx="${xx + fs * .45}" cy="${cy}" r="${act ? fs * .3 : fs * .19}" fill="${act ? (opts.activeC || ac) : (occ ? txt : mix(opts.base || bg, txt, .45))}"/>`); xx += fs * .95; }
+      else if (b.ws === "bars") { r.push(`<rect x="${xx}" y="${cy - fs * .45}" width="${fs * .32}" height="${fs * .9}" rx="${fs * .16}" fill="${act ? (opts.activeC || ac) : mix(opts.base || bg, txt, .4)}"/>`); xx += fs * .7; }
+      else {
+        const w = b.ws === "words" ? tw(l) + fs * .8 : fs * 1.55;
+        if (act && opts.pillActive !== false) r.push(`<rect x="${xx}" y="${cy - fs * .78}" width="${w - fs * .2}" height="${fs * 1.56}" rx="${opts.square ? 1.5 : fs * .78}" fill="${opts.activeC || ac}"/>`);
+        if (act && opts.underline) r.push(`<rect x="${xx + fs * .2}" y="${cy + fs * .85}" width="${w - fs * .6}" height="${fs * .16}" fill="${ac}"/>`);
+        r.push(`<text x="${xx + (w - fs * .2) / 2}" y="${cy + fs * .36}" font-family="${font}" font-size="${fs}" font-weight="${act ? 700 : 500}" text-anchor="middle" fill="${act && opts.pillActive !== false ? on(opts.activeC || ac) : (occ ? txt : mix(opts.base || bg, txt, .5))}">${l}</text>`);
+        xx += w;
+      }
+    });
+    return r.join("");
+  };
+  const drawItem = (it, x, cy, col, iconCol, opts = {}) => {
+    if (it.m === "ws") return drawWs(x, cy, col, opts);
+    const r = []; let xx = x;
+    if (it.hasIcon) { r.push(`<g transform="translate(${xx} ${cy - 5 * s}) scale(${s})">${ICON[it.m](it.m === "power" ? (opts.powerC || iconCol) : iconCol)}</g>`); xx += 10 * s + fs * .4; }
+    if (it.text) r.push(`<text x="${xx}" y="${cy + fs * .36}" font-family="${font}" font-size="${fs}" font-weight="${it.m === "clock" ? 700 : 500}" fill="${col}">${it.text}</text>`);
+    return r.join("");
+  };
+  const gap = fs * (["powerline", "roundline", "blocks"].includes(b.style) ? 2.1 : ["bubbles", "outline", "brackets"].includes(b.style) ? 1.7 : 1.1);
+  const groupW = arr => arr.reduce((a, it) => a + it.w, 0) + Math.max(0, arr.length - 1) * gap;
+
+  const L = items(b.left), C = items(b.center), R = items(b.right);
+  const floating = ["pills", "island", "split", "bubbles", "glass", "outline"].includes(b.style);
+  const by = b.pos === "b" ? H - h - (floating ? 8 : 0) : (floating ? 8 : 0);
+  const cy = by + h / 2;
+  const padX = floating ? 10 : 12;
+
+  // layout positions of the three groups
+  const pos = (arr, align, x0 = padX, x1 = W - padX) => {
+    const w = groupW(arr);
+    let x = align === "l" ? x0 + h * .35 : align === "r" ? x1 - w - h * .35 : (W - w) / 2;
+    return arr.map(it => { const p = { it, x }; x += it.w + gap; return p; });
+  };
+  const drawRow = (placed, col, iconCol, opts) => placed.map(p => drawItem(p.it, p.x, cy, col, iconCol, opts)).join("");
+  const plainCol = fg, iconCol = mix(fg, mu, .35);
+  const st = b.style;
+
+  if (st === "side") {
+    const sw = h, x = 0;
+    o.push(`<rect x="0" y="0" width="${sw}" height="${H}" fill="${bg}"/><rect x="${sw - .6}" y="0" width=".6" height="${H}" fill="${mix(bg, fg, .15)}"/>`);
+    for (let k = 0; k < 5; k++) o.push(`<rect x="${sw * .25}" y="${12 + k * sw * .62}" width="${sw * .5}" height="${sw * .5}" rx="${sw * .14}" fill="${k === 0 ? ac : mix(bg, fg, .12)}"/>`);
+    ["vol", "bat", "power"].forEach((m, k) => o.push(`<g transform="translate(${sw / 2 - 5 * s} ${H - 98 + k * 19}) scale(${s})">${ICON[m](m === "power" ? ac : iconCol)}</g>`));
+    o.push(`<text x="${sw / 2}" y="${H - 20}" font-family="${font}" font-size="${fs}" font-weight="700" text-anchor="middle" fill="${fg}">21</text><text x="${sw / 2}" y="${H - 6}" font-family="${font}" font-size="${fs}" font-weight="700" text-anchor="middle" fill="${fg}">04</text>`);
+    return wrap(o);
+  }
+
+  const strip = (y, fill, opts = "") => `<rect x="0" y="${y}" width="${W}" height="${h}" fill="${fill}" ${opts}/>`;
+  if (st === "double") {
+    const top = 0, bot = H - h;
+    o.push(strip(top, bg), strip(bot, mix(bg, sf, .6)), `<rect y="${h - .6}" width="${W}" height=".6" fill="${mix(bg, fg, .15)}"/>`);
+    const cyT = top + h / 2, cyB = bot + h / 2;
+    const c = pos(C, "c"), r = pos(R, "r"), l = pos(L, "l");
+    o.push(c.map(p => drawItem(p.it, p.x, cyT, fg, iconCol)).join(""), r.map(p => drawItem(p.it, p.x, cyT, fg, iconCol, { powerC: ac })).join(""), l.map(p => drawItem(p.it, p.x, cyB, fg, iconCol)).join(""));
+    return wrap(o);
+  }
+  if (["full", "underline", "overline", "plain", "icons", "brackets", "powerline", "roundline", "blocks", "tabs"].includes(st)) o.push(strip(by, bg, st === "plain" ? `opacity=".92"` : ""));
+  if (st === "full") o.push(`<rect y="${b.pos === "b" ? by : h - .6}" width="${W}" height=".6" fill="${mix(bg, fg, .15)}"/>`);
+  if (st === "gradient") o.push(`<rect x="0" y="${by}" width="${W}" height="${h}" fill="url(#g${id})"/>`);
+  if (st === "glass") o.push(`<rect x="8" y="${by}" width="${W - 16}" height="${h}" rx="${h / 2.6}" fill="${bg}" opacity=".55" stroke="${ac}" stroke-width=".9"/>`);
+
+  const pl = pos(L, "l"), pr = pos(R, "r");
+  let pc = pos(C, "c");
+  // keep the centre group clear of the right group on busy bars
+  if (pc.length && pr.length) {
+    const cEnd = pc[pc.length - 1].x + pc[pc.length - 1].it.w, rStart = pr[0].x - gap * 1.5;
+    if (cEnd > rStart) { const shift = cEnd - rStart; pc = pc.map(p => ({ it: p.it, x: p.x - shift })); }
+  }
+  const all = [pl, pc, pr];
+
+  switch (st) {
+    case "full": case "glass": case "icons":
+      o.push(drawRow(pl, plainCol, iconCol), drawRow(pc, fg, iconCol), drawRow(pr, plainCol, st === "icons" ? fg : iconCol, { powerC: st === "icons" ? b.pal === "grim" ? ac : mix(ac, "#ff4d5a", .4) : ac })); break;
+    case "gradient": { const t = on(ac); o.push(drawRow(pl, t, t, { activeC: t, base: ac }), drawRow(pc, t, t), drawRow(pr, t, t, { powerC: t })); break; }
+    case "pills": case "split": case "island": {
+      const groups = st === "island" ? [pos([...L, ...C, ...R], "c")] : st === "split" ? [pl, pos([...C, ...R], "r")] : all;
+      groups.forEach(g => { if (!g.length) return; const x0 = g[0].x - fs * .9, x1 = g[g.length - 1].x + g[g.length - 1].it.w + fs * .9;
+        o.push(`<rect x="${x0}" y="${by}" width="${x1 - x0}" height="${h}" rx="${h / 2}" fill="${bg}" opacity=".96"/>`);
+        o.push(drawRow(g, fg, iconCol, { powerC: ac })); });
+      break; }
+    case "bubbles": case "outline":
+      all.forEach(g => g.forEach(p => { const x0 = p.x - fs * .6, w = p.it.w + fs * 1.2;
+        o.push(st === "bubbles" ? `<rect x="${x0}" y="${by + 2}" width="${w}" height="${h - 4}" rx="${(h - 4) / 2}" fill="${sf}" opacity=".97"/>`
+                                : `<rect x="${x0}" y="${by + 2}" width="${w}" height="${h - 4}" rx="${(h - 4) / 3}" fill="${bg}" fill-opacity=".55" stroke="${p.it.m === "ws" ? ac : mix(ac, fg, .3)}" stroke-width="1"/>`);
+        o.push(drawItem(p.it, p.x, cy, fg, iconCol, { powerC: ac, base: sf })); }));
+      break;
+    case "underline": case "overline": {
+      let k = 0;
+      all.forEach(g => g.forEach(p => { const c = p.it.m === "ws" ? ac : cycle[k++ % cycle.length];
+        if (p.it.m === "ws") o.push(drawItem(p.it, p.x, cy, fg, iconCol, { pillActive: false, underline: st === "underline" }));
+        else { o.push(drawItem(p.it, p.x, cy, fg, c));
+          o.push(`<rect x="${p.x}" y="${st === "underline" ? by + h - 2.4 : by}" width="${p.it.w}" height="2.4" fill="${c}"/>`); }
+        if (p.it.m === "ws" && st === "overline") o.push(`<rect x="${p.x}" y="${by}" width="${fs * 1.35}" height="2.4" fill="${ac}"/>`); }));
+      break; }
+    case "plain": {
+      all.forEach(g => g.forEach((p, i) => { o.push(drawItem(p.it, p.x, cy, p.it.m === "ws" ? fg : fg, mu, { pillActive: false }));
+        if (i < g.length - 1) o.push(`<text x="${p.x + p.it.w + gap / 2}" y="${cy + fs * .36}" font-family="${font}" font-size="${fs}" fill="${mu}" text-anchor="middle">·</text>`); }));
+      break; }
+    case "brackets": {
+      all.forEach(g => g.forEach(p => { o.push(`<text x="${p.x - fs * .62}" y="${cy + fs * .36}" font-family="${font}" font-size="${fs}" fill="${ac}">[</text><text x="${p.x + p.it.w + fs * .05}" y="${cy + fs * .36}" font-family="${font}" font-size="${fs}" fill="${ac}">]</text>`);
+        o.push(drawItem(p.it, p.x, cy, fg, a2, { square: true, powerC: ac })); }));
+      break; }
+    case "powerline": case "roundline": case "blocks": {
+      const segs = (g, dir) => { g.forEach((p, i) => { const c = p.it.m === "ws" ? sf : cycle[i % cycle.length];
+        const x0 = p.x - fs * .7, x1 = p.x + p.it.w + fs * .7, t = p.it.m === "ws" ? fg : on(c);
+        if (st === "blocks") o.push(`<rect x="${x0}" y="${by + 3}" width="${x1 - x0}" height="${h - 6}" fill="${c}"/>`);
+        else if (st === "roundline") o.push(`<rect x="${x0}" y="${by + 2.5}" width="${x1 - x0}" height="${h - 5}" rx="${(h - 5) / 2}" fill="${c}"/>`);
+        else o.push(dir > 0 ? `<path d="M${x0} ${by}H${x1}L${x1 + h * .38} ${cy}L${x1} ${by + h}H${x0}${i ? `L${x0 + h * .38} ${cy}Z` : "Z"}" fill="${c}"/>`
+                            : `<path d="M${x1} ${by}H${x0}L${x0 - h * .38} ${cy}L${x0} ${by + h}H${x1}${i < g.length - 1 ? `L${x1 - h * .38} ${cy}Z` : "Z"}" fill="${c}"/>`);
+        o.push(drawItem(p.it, p.x, cy, t, t, { activeC: ac, powerC: t, base: c })); }); };
+      segs(pl, 1); segs(pr, -1);
+      o.push(drawRow(pc, fg, iconCol)); break; }
+    case "tabs": {
+      pl.forEach(p => { if (p.it.m !== "ws") { o.push(drawItem(p.it, p.x, cy, fg, iconCol)); return; }
+        let xx = p.x; wsLabels.forEach((l, k) => { const w = fs * 2.4, act = k === 0;
+          o.push(`<path d="M${xx} ${by + h}L${xx + fs * .35} ${by + 3}H${xx + w - fs * .35}L${xx + w} ${by + h}Z" fill="${act ? ac : mix(bg, fg, .1)}"/>`);
+          o.push(`<text x="${xx + w / 2}" y="${cy + fs * .55}" font-family="${font}" font-size="${fs}" font-weight="${act ? 700 : 500}" text-anchor="middle" fill="${act ? on(ac) : mu}">${l || k + 1}</text>`); xx += w - fs * .2; }); });
+      o.push(drawRow(pc, mu, iconCol), drawRow(pr, fg, iconCol, { powerC: ac })); break; }
+    case "notch": {
+      o.push(`<rect x="0" y="0" width="${W}" height="${h * .78}" fill="${bg}" opacity=".9"/>`);
+      const cw = groupW(C) + fs * 3, cx = (W - cw) / 2;
+      o.push(`<path d="M${cx - 10} 0 Q${cx} 0 ${cx} 8 V${h - 6} Q${cx} ${h + 2} ${cx + 10} ${h + 2} H${cx + cw - 10} Q${cx + cw} ${h + 2} ${cx + cw} ${h - 6} V8 Q${cx + cw} 0 ${cx + cw + 10} 0 Z" fill="${ac}"/>`);
+      const cyN = h * .39;
+      o.push(pl.map(p => drawItem(p.it, p.x, cyN, fg, iconCol)).join(""), pc.map(p => drawItem(p.it, p.x, cy, on(ac), on(ac))).join(""), pr.map(p => drawItem(p.it, p.x, cyN, fg, iconCol, { powerC: ac })).join(""));
+      break; }
+    case "corners": {
+      const lw = groupW(L) + h * 1.2, rw = groupW([...C, ...R]) + h * 1.2;
+      o.push(`<path d="M0 0H${lw}V${h - 8}Q${lw} ${h} ${lw - 8} ${h}H0Z" fill="${bg}"/><path d="M${W} 0H${W - rw}V${h - 8}Q${W - rw} ${h} ${W - rw + 8} ${h}H${W}Z" fill="${bg}"/>`);
+      o.push(drawRow(pos(L, "l", 0), fg, iconCol), drawRow(pos([...C, ...R], "r", 0, W), fg, iconCol, { powerC: ac })); break; }
+  }
+  return wrap(o);
+  function wrap(parts) { return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Preview of the ${b.name} bar">${parts.join("")}</svg>`; }
+}
+
+// ---------------------------------------------------------------- cards
+let stars = new Set();
+try { stars = new Set(JSON.parse(localStorage.getItem("grim-bar-stars") || "[]")); } catch (e) {}
+const saveStars = () => { try { localStorage.setItem("grim-bar-stars", JSON.stringify([...stars])); } catch (e) {} };
+const modsText = b => [b.left, b.center, b.right].map(g => g.join(" ") || "–").join("  |  ");
+function spec(b) {
+  const [bg, sf, fg, mu, ac, a2, a3] = DATA.palettes[b.pal];
+  return JSON.stringify({ name: b.name, program: DATA.tools[b.tool], style: b.style, position: b.pos === "b" ? "bottom" : "top",
+    height: b.h, workspaces: b.ws, modules: { left: b.left, center: b.center, right: b.right },
+    font: DATA.fonts[b.font] + " Nerd Font", colors: { bg, surface: sf, fg, muted: mu, accent: ac, accent2: a2, accent3: a3 } }, null, 2);
+}
+async function copyText(text, btn, done) {
+  const old = btn.textContent;
+  try { await navigator.clipboard.writeText(text); btn.textContent = done; } catch (e) { btn.textContent = "Copy failed"; }
+  setTimeout(() => (btn.textContent = old), 1400);
+}
+const grid = document.getElementById("grid");
+const state = { q: "", t: "", st: "", starsOnly: false };
+const cards = DATA.bars.map(b => {
+  const [bg, sf, fg, mu, ac, a2, a3] = DATA.palettes[b.pal];
+  const el = document.createElement("article");
+  el.className = "card"; el.dataset.n = b.n; el.dataset.tool = b.tool; el.dataset.style = b.style;
+  el.dataset.search = (b.name + " " + b.desc + " " + b.style + " " + b.pal).toLowerCase();
+  el.innerHTML = `${render(b)}
+    <div class="info">
+      <div class="top"><span class="num">#${String(b.n).padStart(2, "0")}</span><h2 class="name">${b.name}</h2><span class="tool">${DATA.tools[b.tool]}</span></div>
+      <p class="desc">${b.desc}</p>
+      <div class="sw" title="Palette">${[bg, sf, fg, mu, ac, a2, a3].map(c => `<i style="background:${c}"></i>`).join("")}</div>
+      <dl class="spec"><dt>Style</dt><dd>${STYLE_NAME[b.style]} · ${b.pos === "b" ? "bottom" : "top"} · ${b.h}px</dd>
+        <dt>Modules</dt><dd>${modsText(b)}</dd><dt>Font</dt><dd>${DATA.fonts[b.font]}</dd></dl>
+      <div class="acts"><button class="act star" type="button" aria-pressed="${stars.has(b.n)}">${stars.has(b.n) ? "★ Starred" : "☆ Star"}</button>
+        <button class="act copy" type="button">Copy recipe</button></div>
+    </div>`;
+  const sb = el.querySelector(".star"); if (stars.has(b.n)) sb.classList.add("on");
+  sb.addEventListener("click", () => { stars.has(b.n) ? stars.delete(b.n) : stars.add(b.n); saveStars();
+    const s = stars.has(b.n); sb.classList.toggle("on", s); sb.setAttribute("aria-pressed", s); sb.textContent = s ? "★ Starred" : "☆ Star"; apply(); });
+  el.querySelector(".copy").addEventListener("click", e => copyText(spec(b), e.currentTarget, "Copied"));
+  grid.appendChild(el); return el;
+});
+const sel = document.getElementById("st");
+Object.entries(STYLE_NAME).forEach(([k, v]) => { if (DATA.bars.some(b => b.style === k)) { const o = document.createElement("option"); o.value = k; o.textContent = v; sel.appendChild(o); } });
+function apply() {
+  let shown = 0;
+  for (const c of cards) {
+    const ok = (!state.t || c.dataset.tool.includes(state.t)) && (!state.st || c.dataset.style === state.st)
+      && (!state.q || c.dataset.search.includes(state.q)) && (!state.starsOnly || stars.has(+c.dataset.n));
+    c.hidden = !ok; if (ok) shown++;
+  }
+  document.getElementById("count").textContent = `${shown} of ${cards.length} bars · ${stars.size} starred`;
+  document.getElementById("empty").hidden = shown > 0;
+}
+document.querySelectorAll("#tf .chipbtn").forEach(btn => btn.addEventListener("click", () => {
+  document.querySelectorAll("#tf .chipbtn").forEach(x => x.setAttribute("aria-pressed", "false"));
+  btn.setAttribute("aria-pressed", "true"); state.t = btn.dataset.t; apply(); }));
+sel.addEventListener("change", () => { state.st = sel.value; apply(); });
+document.getElementById("q").addEventListener("input", e => { state.q = e.target.value.trim().toLowerCase(); apply(); });
+const so = document.getElementById("starsonly");
+so.addEventListener("click", () => { state.starsOnly = !state.starsOnly; so.setAttribute("aria-pressed", state.starsOnly); apply(); });
+document.getElementById("copylist").addEventListener("click", e => {
+  const list = DATA.bars.filter(b => stars.has(b.n)).map(b => `#${b.n} ${b.name}`);
+  copyText(list.length ? "Build these Grim bars: " + list.join(", ") : "No bars starred yet.", e.currentTarget, list.length ? `Copied ${list.length}` : "Star some first");
+});
+apply();
+</script>

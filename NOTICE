@@ -1,0 +1,21 @@
+Grim OS includes or is built from parts of other projects. They keep their own licences:
+
+arch/profile/                 Based on archiso's "releng" profile (Arch Linux, GPL-3.0-or-later).
+arch/kernel/linux-grim/       PKGBUILD and config.x86_64 from Arch Linux's linux package (0BSD);
+                              the kernel itself is Linux (GPL-2.0-only).
+void/pkgs/linux-grim/         xbps-src template, config and patches from Void Linux's linux6.18
+                              package (void-packages, BSD-2-Clause); the kernel is GPL-2.0-only.
+void/pkgs/dwm-grim/           Template from void-packages (BSD-2-Clause); config.h is made from
+                              dwm 6.8's config.def.h (dwm: MIT, suckless.org).
+void/pkgs/spotify-player-grim Template from void-packages (BSD-2-Clause); spotify-player is MIT.
+void/mklive-grim.patch        Changes to void-mklive (Void Linux, Unlicense / public domain).
+*/0001-bore.patch             BORE scheduler by Masahito Suzuki (firelzrd), GPL-2.0, from
+                              https://github.com/firelzrd/bore-scheduler
+void/grim/usr/share/grim/logos/void.txt
+                              Void Linux's ASCII logo (as used by neofetch/fastfetch) with the
+                              word VOID replaced by GRIM.
+void/branding/make-logo.py    Draws "GRIM" with Noto Sans Black Italic (SIL Open Font License),
+                              converted to outlines.
+
+Void Linux and Arch Linux are trademarks of their owners. Grim OS is not affiliated with
+or endorsed by either project.

@@ -1,0 +1,3 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" color="#0a0a0a" style="--bg:#f2f2f2"><defs><mask id="rh"><rect width="200" height="200" fill="#fff"/><rect x="88" y="-20" width="24" height="240" fill="#000" transform="rotate(0 100 100)"/></mask></defs>
+<g mask="url(#rh)"><circle cx="100" cy="100" r="78" fill="none" stroke="currentColor" stroke-width="18"/></g>
+<path d="M80 10 H120 V18 C120 40 104 46 104 52 C104 58 120 64 120 86 V90 H80 V86 C80 64 96 58 96 52 C96 46 80 40 80 18 Z" fill="currentColor" transform="translate(0 50)"/></svg>

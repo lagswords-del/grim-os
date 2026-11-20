@@ -1,0 +1,18 @@
+# grimfetch config for Grim Void. Copy to ~/.config/grimfetch/config.toml to make your own,
+# or switch the logo with:  grimctl fetch logo void   (or reaper)
+# Colours: black red green yellow blue magenta cyan white, bright_<name>, default, or "#rrggbb".
+
+logo = "void"              # void = the Grim Void ring, reaper = the Grim OS reaper
+ascii = "/usr/share/grim/logos/reaper.txt"
+title_color = "red"        # the labels (OS, Kernel, ...) and user@host
+ascii_color = "white"      # the reaper's colour
+ascii_colors = ["#c1121f", "#4a4a4a"]   # the ring: top arc and GRIM (red), bottom arc (dark grey)
+text_color  = "default"    # the values
+gap = 3
+show_title = true
+show_colors = true
+
+# Lines to show, in order:
+#   os host kernel uptime packages shell desktop terminal resolution memory swap disk battery localip locale
+modules = ["os", "host", "kernel", "uptime", "packages", "shell", "desktop", "terminal",
+           "memory", "swap", "disk", "battery"]

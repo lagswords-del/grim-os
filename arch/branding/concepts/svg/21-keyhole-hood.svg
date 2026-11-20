@@ -1,0 +1,2 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" color="#0a0a0a" style="--bg:#f2f2f2"><defs><mask id="kh"><rect width="200" height="200" fill="#fff"/><circle cx="100" cy="84" r="22" fill="#000"/><path d="M90 96 L82 150 H118 L110 96 Z" fill="#000"/></mask></defs>
+<rect mask="url(#kh)" x="34" y="24" width="132" height="152" rx="30" fill="currentColor"/></svg>

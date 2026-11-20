@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" color="#0a0a0a" style="--bg:#f2f2f2"><circle cx="100" cy="100" r="80" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="2 6"/>
+<circle cx="100" cy="100" r="66" fill="none" stroke="currentColor" stroke-width="6"/>
+<defs><mask id="ec"><rect width="200" height="200" fill="#fff"/><path d="M100 60 C82 66 74 86 74 106 C74 126 76 140 80 150 H120 C124 140 126 126 126 106 C126 86 118 66 100 60 Z" fill="#000"/></mask></defs>
+<circle mask="url(#ec)" cx="100" cy="100" r="56" fill="currentColor"/></svg>

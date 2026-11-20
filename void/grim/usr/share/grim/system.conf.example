@@ -1,0 +1,29 @@
+# /etc/grim/system.conf: Grim Void's whole system in one file, a bit like NixOS.
+#
+# Change it, then run:  sudo grimctl apply
+#   - add a package name    -> it gets installed
+#   - delete a line         -> it gets uninstalled
+#   - install something with xbps-install -> it's added here by the next apply/update
+#
+# Package kinds:  name             a Void package
+#                 @flatpak:ID      an app from Flathub        (e.g. @flatpak:com.discordapp.Discord)
+#                 @src:NAME        a Void recipe built on this PC with -march=native
+#                 @src:URL         any git repository, built and packaged by grimctl
+
+hostname = grimvoid
+timezone = Europe/London
+keymap = us
+desktop = icewm          # what starts when you log in on tty1: icewm niri openbox i3 dwm river, ask, or none
+boot = desktop           # desktop, or lowram (a console only: no desktop, network or services)
+auto_update = daily      # off, daily or weekly (grimctl update runs by itself)
+zram = 50%               # compressed swap in RAM: a % of RAM, a size like 4G, or off
+
+# runit services in the normal runlevel (low-RAM mode only runs a console)
+services = [
+  dbus polkitd NetworkManager chronyd grim-zram
+]
+
+# apps (system packages from the install are not listed: they're the base)
+packages = [
+  fish-shell
+]

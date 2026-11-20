@@ -1,0 +1,8 @@
+#!/bin/sh
+# grim-backlight: screen brightness icon + percent for the bar. Prints nothing on desktops without a backlight.
+for d in /sys/class/backlight/*; do
+    [ -r "$d/brightness" ] || continue
+    b=$(cat "$d/brightness"); m=$(cat "$d/max_brightness")
+    [ "$m" -gt 0 ] && printf '\357\206\205 %s%%\n' $((b * 100 / m)) && exit 0
+done
+echo ""

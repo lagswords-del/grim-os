@@ -1,0 +1,553 @@
+#!/usr/bin/env python3
+"""Grim Settings: categories on the left, settings on the right.
+Works on every Grim OS desktop; grim-rice does the actual work."""
+import json, os, shutil, subprocess, sys, threading
+from pathlib import Path
+
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
+
+SHARE = Path(os.environ.get("GRIM_SHARE", "/usr/share/grimos"))
+VERSION = "1.1.5"
+RICE = os.environ.get("GRIM_RICE_BIN", "grim-rice")
+
+PAGES = [  # id, title, icon
+    ("rices", "Rices", "preferences-desktop-appearance-symbolic"),
+    ("display", "Display", "video-display-symbolic"),
+    ("bars", "Bars", "view-continuous-symbolic"),
+    ("dock", "Dock", "view-grid-symbolic"),
+    ("wallpapers", "Wallpapers", "preferences-desktop-wallpaper-symbolic"),
+    ("colours", "Colours", "color-select-symbolic"),
+    ("terminal", "Terminal", "utilities-terminal-symbolic"),
+    ("shortcuts", "Shortcuts", "input-keyboard-symbolic"),
+    ("about", "About", "help-about-symbolic"),
+]
+MODULE_NAMES = {"volume": "Volume", "network": "Wi-Fi and network", "battery": "Battery", "cpu": "CPU use",
+                "memory": "Memory use", "updates": "Waiting updates", "tray": "App tray", "power": "Power button"}
+COLOUR_NAMES = [("bg", "Background"), ("bg2", "Bars and panels"), ("bg3", "Raised surfaces"), ("fg", "Text"),
+                ("muted", "Dim text"), ("accent", "Accent"), ("accent_fg", "Text on accent"), ("accent2", "Second accent"),
+                ("urgent", "Warnings"), ("border_active", "Active window border"), ("border_inactive", "Other window borders")]
+BINDS = [
+    ("Super + T", "Toggle floating (maximize on IceWM, Openbox, XFCE, GNOME, KDE)"),
+    ("Super + Q", "Close the window"), ("Super + Space", "Find an app"), ("Super + Return", "Open a terminal"),
+    ("Print", "Screenshot: drag over an area"), ("Super + left drag", "Move a window"),
+    ("Super + right drag", "Resize a window"), ("Super + F1", "Open Grim Settings"),
+    ("Super + Shift + E", "Power menu"), ("Super + 1 … 9", "Go to workspace (tiling window managers)"),
+]
+OWN_DISPLAY_TOOL = {"gnome": ["gnome-control-center", "display"], "kde": ["kcmshell6", "kcm_kscreen"],
+                    "xfce": ["xfce4-display-settings"], "cosmic": ["cosmic-settings", "displays"]}
+CSS = b"""
+.swatch { min-width: 16px; min-height: 16px; border-radius: 8px; border: 1px solid alpha(currentColor, .25); }
+.thumb { border-radius: 10px; }
+.thumb-current { outline: 3px solid @accent_color; outline-offset: 2px; border-radius: 10px; }
+.inuse { font-weight: 700; color: @accent_color; }
+.big-title { font-size: 26px; font-weight: 800; }
+.navigation-sidebar row { padding: 8px 10px; }
+"""
+
+
+def rice_json(*args):
+    try:
+        return json.loads(subprocess.run([RICE, *args], capture_output=True, text=True, timeout=30).stdout or "null")
+    except Exception:
+        return None
+
+
+def mono_fonts():
+    try:
+        out = subprocess.run(["fc-list", ":spacing=mono", "family"], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return []
+    fams = {f.split(",")[0].strip() for f in out.splitlines() if f.strip()}
+    nerd = sorted(f for f in fams if "Nerd Font Mono" in f)
+    return nerd or sorted(fams)
+
+
+
+# ---------------------------------------------------------------- grimfetch colours (shared with Grim DE Settings)
+FETCH_NAMED = {"black": "#2e3440", "red": "#e06c75", "green": "#98c379", "yellow": "#e5c07b", "blue": "#61afef",
+               "magenta": "#c678dd", "cyan": "#56b6c2", "white": "#e5e9f0", "default": "#d8dee9"}
+FETCH_KEYS = [("title_color", "Main words", "OS, Kernel, Memory... and your user@host"),
+              ("text_color", "Values", "What comes after each word"),
+              ("ascii_color", "Logo", "The reaper on the left")]
+
+
+def fetch_colour_rows(group, notify):
+    """One colour picker per grimfetch colour, plus a reset button. Saved through grimfetch-config."""
+    def current(key):
+        try:
+            v = subprocess.run(["grimfetch-config", "get", key], capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception:
+            v = ""
+        v = v.lower()
+        return FETCH_NAMED.get(v.replace("bright_", ""), v if v.startswith("#") else "#d8dee9")
+
+    for key, title, sub in FETCH_KEYS:
+        row = Adw.ActionRow(title=title, subtitle=sub)
+        c = Gdk.RGBA(); c.parse(current(key))
+        btn = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=False), rgba=c, valign=Gtk.Align.CENTER)
+
+        def picked(b, _p, key=key, title=title):
+            r = b.get_rgba()
+            hexv = "#%02x%02x%02x" % (round(r.red * 255), round(r.green * 255), round(r.blue * 255))
+            subprocess.run(["grimfetch-config", "set", key, hexv])
+            notify(f"grimfetch: {title.lower()} colour changed")
+        hid = btn.connect("notify::rgba", picked)
+        reset = Gtk.Button(icon_name="edit-undo-symbolic", valign=Gtk.Align.CENTER, css_classes=["flat"], tooltip_text="Back to the default")
+
+        def do_reset(_b, key=key, btn=btn, hid=hid, title=title):
+            subprocess.run(["grimfetch-config", "reset", key])
+            c = Gdk.RGBA(); c.parse(current(key))
+            btn.handler_block(hid); btn.set_rgba(c); btn.handler_unblock(hid)
+            notify(f"grimfetch: {title.lower()} colour reset")
+        reset.connect("clicked", do_reset)
+        row.add_suffix(reset); row.add_suffix(btn); group.add(row)
+    try_row = Adw.ButtonRow(title="Show grimfetch in a terminal")
+    try_row.connect("activated", lambda *_: subprocess.Popen(["sh", "-c", "grim-term -e sh -c 'grimfetch; printf \"\\nPress Enter to close. \"; read x' || grim-de term -e sh -c 'grimfetch; read x'"]))
+    group.add(try_row)
+
+class Window(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="Grim Settings")
+        self.set_default_size(980, 680)
+        self.info = rice_json("info") or {}
+        self.pending = {}
+        self.toast = Adw.ToastOverlay()
+
+        # sidebar
+        self.sidebar = Gtk.ListBox(css_classes=["navigation-sidebar"])
+        for pid, title, icon in PAGES:
+            row = Gtk.ListBoxRow(name=pid)
+            box = Gtk.Box(spacing=12)
+            box.append(Gtk.Image(icon_name=icon))
+            box.append(Gtk.Label(label=title, xalign=0))
+            row.set_child(box)
+            self.sidebar.append(row)
+        self.sidebar.connect("row-activated", self.on_row)
+        side_view = Adw.ToolbarView()
+        side_view.add_top_bar(Adw.HeaderBar(show_title=True))
+        side_view.set_content(Gtk.ScrolledWindow(child=self.sidebar, vexpand=True))
+        side_page = Adw.NavigationPage(title="Grim Settings", child=side_view)
+
+        # content
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        self.content_page = Adw.NavigationPage(title="Rices")
+        cview = Adw.ToolbarView()
+        cview.add_top_bar(Adw.HeaderBar())
+        cview.set_content(self.stack)
+        self.content_page.set_child(cview)
+
+        self.split = Adw.NavigationSplitView(sidebar=side_page, content=self.content_page,
+                                             min_sidebar_width=210, max_sidebar_width=260)
+        self.toast.set_child(self.split)
+        self.set_content(self.toast)
+        bp = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 620sp"))
+        bp.add_setter(self.split, "collapsed", True)
+        self.add_breakpoint(bp)
+
+        self.builders = {"rices": self.page_rices, "display": self.page_display, "bars": self.page_bars,
+                         "dock": self.page_dock, "wallpapers": self.page_wallpapers, "colours": self.page_colours,
+                         "terminal": self.page_terminal, "shortcuts": self.page_shortcuts, "about": self.page_about}
+        self.built = {}
+        self.show_page("rices")
+        self.sidebar.select_row(self.sidebar.get_row_at_index(0))
+
+    # ---------------------------------------------------------------- plumbing
+    def on_row(self, _lb, row):
+        self.show_page(row.get_name())
+        self.split.set_show_content(True)
+
+    def show_page(self, pid, rebuild=False):
+        if rebuild and pid in self.built:
+            self.stack.remove(self.built.pop(pid))
+        if pid not in self.built:
+            w = self.builders[pid]()
+            self.built[pid] = w
+            self.stack.add_named(w, pid)
+        self.stack.set_visible_child_name(pid)
+        self.content_page.set_title(dict((p[0], p[1]) for p in PAGES)[pid])
+
+    def refresh(self, *pages):
+        self.info = rice_json("info") or self.info
+        cur = self.stack.get_visible_child_name()
+        for pid in pages or list(self.built):
+            if pid in self.built and pid != cur:
+                self.stack.remove(self.built.pop(pid))
+        if cur in (pages or [cur]):
+            self.show_page(cur, rebuild=True)
+
+    def rice(self, args, msg, refresh=(), quiet=False):
+        def work():
+            try:
+                p = subprocess.run([RICE, *args], capture_output=True, text=True, timeout=180)
+                text = msg if p.returncode == 0 else (p.stderr.strip().splitlines() or ["Something went wrong"])[-1]
+            except Exception as e:
+                text = str(e)
+            GLib.idle_add(self.done, text, refresh, quiet)
+        threading.Thread(target=work, daemon=True).start()
+
+    def done(self, text, refresh, quiet):
+        if not quiet:
+            self.toast.add_toast(Adw.Toast(title=text, timeout=2))
+        if refresh:
+            self.refresh(*refresh)
+        return False
+
+    def setting(self, key, value, msg, refresh=(), delay=0):
+        """Save a setting through grim-rice; spin buttons and colours wait a moment so quick changes apply once."""
+        if delay:
+            old = self.pending.pop(key, None)
+            if old:
+                GLib.source_remove(old)
+            self.pending[key] = GLib.timeout_add(delay, lambda: (self.pending.pop(key, None),
+                                                                  self.rice(["set", key, json.dumps(value)], msg, refresh)) and False)
+        else:
+            self.rice(["set", key, json.dumps(value)], msg, refresh)
+
+    def state(self):
+        return self.info.get("state", {}) or {}
+
+    @staticmethod
+    def page():
+        return Adw.PreferencesPage()
+
+    # ---------------------------------------------------------------- Rices
+    def page_rices(self):
+        page = self.page()
+        desk = {d: d for d in self.info.get("installed", [])}
+        g = Adw.PreferencesGroup(title="Rices",
+                                 description="A rice sets the colours, wallpaper, window borders, bar and dock on every desktop installed: "
+                                             + (", ".join(desk) or "none yet") + ".")
+        in_use = self.state().get("rice", "grim")
+        for r in rice_json("rices") or []:
+            row = Adw.ActionRow(title=r["name"] + ("  (yours)" if r.get("user") else ""), subtitle=r.get("description", ""))
+            wall = r["wallpaper"] if r["wallpaper"].startswith("/") else str(SHARE / "wallpapers" / r["wallpaper"])
+            pic = Gtk.Picture.new_for_filename(wall); pic.set_content_fit(Gtk.ContentFit.COVER)
+            pic.set_size_request(120, 68); pic.add_css_class("thumb")
+            row.add_prefix(self._wrap(pic))
+            dots = Gtk.Box(spacing=4, valign=Gtk.Align.CENTER)
+            for key in ("bg", "fg", "accent", "accent2"):
+                dots.append(self.swatch(r["colors"].get(key, "#000000")))
+            row.add_suffix(dots)
+            if r["id"] == in_use:
+                lab = Gtk.Label(label="In use", valign=Gtk.Align.CENTER, css_classes=["inuse"]); row.add_suffix(lab)
+            else:
+                b = Gtk.Button(label="Apply", valign=Gtk.Align.CENTER, css_classes=["suggested-action"])
+                b.connect("clicked", lambda btn, rid=r["id"], n=r["name"]: (btn.set_sensitive(False), btn.set_label("Applying…"),
+                                                                           self.rice(["apply", rid, "--all"], f"{n} applied", refresh=[p[0] for p in PAGES])))
+                row.add_suffix(b)
+            g.add(row)
+        page.add(g)
+        g2 = Adw.PreferencesGroup(title="Keep your changes", description="Saves the current colours, wallpaper and bar as a new rice you can come back to.")
+        e = Adw.EntryRow(title="Name for the new rice", show_apply_button=True)
+        e.connect("apply", lambda row: row.get_text().strip() and self.rice(["save-rice", row.get_text().strip()], "Saved as a new rice", refresh=["rices", "colours", "wallpapers"]))
+        g2.add(e); page.add(g2)
+        return page
+
+    def _wrap(self, w):
+        b = Gtk.Box(margin_top=8, margin_bottom=8); b.append(w); return b
+
+    def swatch(self, colour):
+        d = Gtk.Box(css_classes=["swatch"])
+        prov = Gtk.CssProvider(); prov.load_from_string(f"box {{ background: {colour}; }}")
+        d.get_style_context().add_provider(prov, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+        return d
+
+    # ---------------------------------------------------------------- Display
+    def page_display(self):
+        page = self.page()
+        desk = self.info.get("desktop")
+        outs = rice_json("display", "list") or []
+        if not outs:
+            g = Adw.PreferencesGroup(title="Screens")
+            tool = OWN_DISPLAY_TOOL.get(desk)
+            row = Adw.ActionRow(title="This desktop manages its own screens" if tool else "No screens found",
+                                subtitle="Resolution, refresh rate and scale are set in its own settings." if tool
+                                else "Display settings work on i3, Openbox, IceWM, Sway, Hyprland and Niri.")
+            if tool and shutil.which(tool[0]):
+                b = Gtk.Button(label="Open display settings", valign=Gtk.Align.CENTER)
+                b.connect("clicked", lambda *_: subprocess.Popen(tool))
+                row.add_suffix(b)
+            g.add(row); page.add(g)
+            return page
+        saved = self.state().get("displays") or {}
+        for o in outs:
+            g = Adw.PreferencesGroup(title=o["name"], description="Changes ask you to confirm, and go back on their own after 15 seconds if you don't.")
+            modes = o["modes"] or [o["mode"]]
+            mrow = Adw.ComboRow(title="Resolution and refresh rate", model=Gtk.StringList.new([m.replace("@", "  ·  ") + " Hz" for m in modes]))
+            mrow.set_selected(modes.index(o["mode"]) if o["mode"] in modes else 0)
+            g.add(mrow)
+            srow = None
+            if o.get("can_scale"):
+                srow = Adw.SpinRow(title="Scale", adjustment=Gtk.Adjustment(value=o.get("scale", 1.0), lower=0.5, upper=3, step_increment=0.25), digits=2)
+                g.add(srow)
+            arow = Adw.ActionRow(title="Saved for next login" if o["name"] in saved else "Not saved yet",
+                                 subtitle=(saved.get(o["name"], {}).get("mode", "") or "").replace("@", " @ "))
+            b = Gtk.Button(label="Apply", valign=Gtk.Align.CENTER, css_classes=["suggested-action"])
+            b.connect("clicked", lambda _b, o=o, mrow=mrow, srow=srow, modes=modes:
+                      self.try_display(o, modes[mrow.get_selected()], srow.get_value() if srow else 1.0))
+            arow.add_suffix(b); g.add(arow)
+            page.add(g)
+        return page
+
+    def try_display(self, o, mode, scale):
+        old_mode, old_scale = o["mode"], o.get("scale", 1.0)
+        subprocess.run([RICE, "display", "set", o["name"], mode, str(scale)])
+        dlg = Adw.AlertDialog(heading="Keep these display settings?", body="Going back in 15 seconds.")
+        dlg.add_response("revert", "Go back"); dlg.add_response("keep", "Keep")
+        dlg.set_response_appearance("keep", Adw.ResponseAppearance.SUGGESTED)
+        left = [15]
+
+        def tick():
+            left[0] -= 1
+            if left[0] <= 0:
+                dlg.close(); return False
+            dlg.set_body(f"Going back in {left[0]} seconds.")
+            return True
+        timer = GLib.timeout_add_seconds(1, tick)
+
+        def answer(_d, resp):
+            GLib.source_remove(timer) if left[0] > 0 else None
+            if resp == "keep":
+                subprocess.run([RICE, "display", "save", o["name"], mode, str(scale)])
+                self.toast.add_toast(Adw.Toast(title="Display settings saved"))
+            else:
+                subprocess.run([RICE, "display", "set", o["name"], old_mode, str(old_scale)])
+                self.toast.add_toast(Adw.Toast(title="Went back to the old settings"))
+            self.refresh("display")
+        dlg.connect("response", answer)
+        dlg.present(self)
+
+    # ---------------------------------------------------------------- Bars
+    def page_bars(self):
+        page = self.page()
+        styles = self.info.get("bar_styles", {})
+        cur = self.state().get("bar_style") or self.info.get("bar_style_effective", "classic")
+        g = Adw.PreferencesGroup(title="Bar style", description="Every style uses your rice's colours. Polybar on i3, Openbox and IceWM; Waybar on Sway, Hyprland and Niri.")
+        first = None
+        for sid, (name, desc) in styles.items():
+            row = Adw.ActionRow(title=name, subtitle=desc, activatable=True)
+            chk = Gtk.CheckButton(active=sid == cur, valign=Gtk.Align.CENTER)
+            if first: chk.set_group(first)
+            else: first = chk
+            chk.connect("toggled", lambda c, sid=sid, name=name: c.get_active() and self.setting("bar_style", sid, f"Bar: {name}"))
+            row.add_prefix(chk); row.set_activatable_widget(chk)
+            g.add(row)
+        page.add(g)
+        g2 = Adw.PreferencesGroup(title="Layout")
+        pos = Adw.ComboRow(title="Position", model=Gtk.StringList.new(["Top", "Bottom"]))
+        pos.set_selected(1 if self.info.get("bar_position") == "bottom" else 0)
+        pos.connect("notify::selected", lambda r, _p: self.setting("bar_position", "bottom" if r.get_selected() else "top", "Bar moved"))
+        h = Adw.SpinRow(title="Height", subtitle="Pixels", adjustment=Gtk.Adjustment(value=self.info.get("bar_height", 28), lower=20, upper=44, step_increment=1))
+        h.connect("notify::value", lambda r, _p: self.setting("bar_height", int(r.get_value()), "Bar height changed", delay=700))
+        c24 = Adw.SwitchRow(title="24-hour clock", active=self.info.get("clock24", True))
+        c24.connect("notify::active", lambda r, _p: self.setting("clock24", r.get_active(), "Clock changed"))
+        for w in (pos, h, c24): g2.add(w)
+        page.add(g2)
+        g3 = Adw.PreferencesGroup(title="Show on the bar")
+        mods = list(self.info.get("bar_modules", []))
+        for key in self.info.get("bar_modules_all", []):
+            sw = Adw.SwitchRow(title=MODULE_NAMES.get(key, key), active=key in mods)
+            def toggled(r, _p, key=key):
+                cur_m = list(self.info.get("bar_modules", []))
+                if r.get_active() and key not in cur_m: cur_m.append(key)
+                if not r.get_active() and key in cur_m: cur_m.remove(key)
+                order = self.info.get("bar_modules_all", [])
+                self.info["bar_modules"] = [k for k in order if k in cur_m]
+                self.setting("bar_modules", self.info["bar_modules"], "Bar updated", delay=400)
+            sw.connect("notify::active", toggled)
+            g3.add(sw)
+        page.add(g3)
+        return page
+
+    # ---------------------------------------------------------------- Dock
+    def page_dock(self):
+        page = self.page()
+        g = Adw.PreferencesGroup(title="Dock", description="Plank on X11 desktops, nwg-dock on Wayland, Dash to Panel on GNOME. KDE and COSMIC keep their own.")
+        on = Adw.SwitchRow(title="Show the dock", active=bool(self.info.get("dock", True)))
+        on.connect("notify::active", lambda r, _p: self.setting("dock", r.get_active(), "Dock shown" if r.get_active() else "Dock hidden"))
+        posl = ["bottom", "left", "right"]
+        pos = Adw.ComboRow(title="Position", model=Gtk.StringList.new(["Bottom", "Left", "Right"]))
+        pos.set_selected(posl.index(self.info.get("dock_position", "bottom")) if self.info.get("dock_position") in posl else 0)
+        pos.connect("notify::selected", lambda r, _p: self.setting("dock_position", posl[r.get_selected()], "Dock moved"))
+        size = Adw.SpinRow(title="Icon size", subtitle="Pixels", adjustment=Gtk.Adjustment(value=self.info.get("dock_size", 44), lower=24, upper=72, step_increment=2))
+        size.connect("notify::value", lambda r, _p: self.setting("dock_size", int(r.get_value()), "Dock resized", delay=700))
+        hide = Adw.SwitchRow(title="Hide when a window is in the way", active=bool(self.info.get("dock_autohide", False)))
+        hide.connect("notify::active", lambda r, _p: self.setting("dock_autohide", r.get_active(), "Dock updated"))
+        for w in (on, pos, size, hide): g.add(w)
+        page.add(g)
+        return page
+
+    # ---------------------------------------------------------------- Wallpapers
+    def page_wallpapers(self):
+        page = self.page()
+        cur = self.info.get("wall", "")
+        g = Adw.PreferencesGroup(title="Wallpaper", description="From Grim OS, ~/Pictures/Wallpapers and ~/Pictures.")
+        add = Gtk.Button(label="Add a picture…", valign=Gtk.Align.CENTER)
+        add.connect("clicked", self.add_wallpaper)
+        reset = Gtk.Button(label="Use the rice's own", valign=Gtk.Align.CENTER, css_classes=["flat"])
+        reset.connect("clicked", lambda *_: self.rice(["unset", "wallpaper"], "Back to the rice's wallpaper", refresh=["wallpapers", "rices"]))
+        hb = Gtk.Box(spacing=6); hb.append(reset); hb.append(add)
+        g.set_header_suffix(hb)
+        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4, min_children_per_line=2,
+                           column_spacing=12, row_spacing=12, homogeneous=True)
+        for path in rice_json("wallpapers") or []:
+            pic = Gtk.Picture.new_for_filename(path); pic.set_content_fit(Gtk.ContentFit.COVER)
+            pic.set_size_request(180, 104); pic.add_css_class("thumb")
+            if path == cur: pic.add_css_class("thumb-current")
+            btn = Gtk.Button(child=pic, css_classes=["flat"], tooltip_text=Path(path).name)
+            btn.connect("clicked", lambda _b, p=path: self.setting("wallpaper", p, "Wallpaper changed", refresh=["wallpapers"]))
+            flow.append(btn)
+        g.add(flow); page.add(g)
+        g2 = Adw.PreferencesGroup()
+        modes = ["fill", "fit", "center", "tile"]
+        mode = Adw.ComboRow(title="How it fits the screen", model=Gtk.StringList.new(["Fill (crop)", "Fit (whole picture)", "Centre", "Tile"]))
+        mode.set_selected(modes.index(self.info.get("wall_mode", "fill")))
+        mode.connect("notify::selected", lambda r, _p: self.setting("wallpaper_mode", modes[r.get_selected()], "Wallpaper fit changed"))
+        g2.add(mode); page.add(g2)
+        return page
+
+    def add_wallpaper(self, _btn):
+        dlg = Gtk.FileDialog(title="Pick a wallpaper")
+        f = Gtk.FileFilter(); f.set_name("Pictures"); [f.add_suffix(x) for x in ("jpg", "jpeg", "png", "webp")]
+        filters = Gio.ListStore.new(Gtk.FileFilter); filters.append(f); dlg.set_filters(filters)
+
+        def picked(d, res):
+            try:
+                src = d.open_finish(res).get_path()
+            except GLib.Error:
+                return
+            dest = Path.home() / "Pictures/Wallpapers"; dest.mkdir(parents=True, exist_ok=True)
+            target = dest / Path(src).name
+            if Path(src) != target:
+                shutil.copy2(src, target)
+            self.setting("wallpaper", str(target), "Wallpaper added", refresh=["wallpapers"])
+        dlg.open(self, None, picked)
+
+    # ---------------------------------------------------------------- Colours
+    def page_colours(self):
+        page = self.page()
+        colours = self.info.get("colors", {})
+        over = self.state().get("colors") or {}
+        g = Adw.PreferencesGroup(title=f"Colours of {self.info.get('name', 'this rice')}",
+                                 description="Changes go on top of the rice. Save them as your own rice on the Rices page.")
+        reset = Gtk.Button(label="Reset", valign=Gtk.Align.CENTER, css_classes=["flat"], sensitive=bool(over))
+        reset.connect("clicked", lambda *_: self.rice(["unset", "colors"], "Colours reset", refresh=["colours", "rices"]))
+        g.set_header_suffix(reset)
+        for key, label in COLOUR_NAMES:
+            if key not in colours:
+                continue
+            row = Adw.ActionRow(title=label, subtitle=colours[key] + ("  · changed" if key in over else ""))
+            rgba = Gdk.RGBA(); rgba.parse(colours[key])
+            btn = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=False), rgba=rgba, valign=Gtk.Align.CENTER)
+            def changed(b, _p, key=key, row=row):
+                c = b.get_rgba()
+                hexc = "#%02x%02x%02x" % (round(c.red * 255), round(c.green * 255), round(c.blue * 255))
+                row.set_subtitle(hexc + "  · changed")
+                o = dict(self.state().get("colors") or {}); o[key] = hexc
+                self.info.setdefault("state", {})["colors"] = o
+                self.setting("colors", o, "Colours applied", delay=900)
+            btn.connect("notify::rgba", changed)
+            row.add_suffix(btn); row.set_activatable_widget(btn)
+            g.add(row)
+        page.add(g)
+        return page
+
+    # ---------------------------------------------------------------- Terminal
+    def page_terminal(self):
+        page = self.page()
+        t = self.info.get("term", {})
+        g = Adw.PreferencesGroup(title="Terminal", description="Alacritty, kitty and foot all follow these.")
+        fonts = mono_fonts() or [t.get("font", "monospace")]
+        if t.get("font") not in fonts: fonts.insert(0, t.get("font"))
+        font = Adw.ComboRow(title="Font", model=Gtk.StringList.new(fonts), enable_search=True)
+        font.set_selected(fonts.index(t.get("font")))
+        size = Adw.SpinRow(title="Font size", adjustment=Gtk.Adjustment(value=t.get("size", 11), lower=7, upper=28, step_increment=1))
+        opac = Adw.SpinRow(title="Opacity", subtitle="Percent (needs a compositor: picom, Sway, Hyprland, Niri)",
+                           adjustment=Gtk.Adjustment(value=round(float(t.get("opacity", 1)) * 100), lower=40, upper=100, step_increment=5))
+        pad = Adw.SpinRow(title="Padding", subtitle="Pixels around the text", adjustment=Gtk.Adjustment(value=t.get("padding", 12), lower=0, upper=40, step_increment=2))
+        fetch = Adw.SwitchRow(title="Show grimfetch when a terminal opens", active=bool(t.get("fetch", False)))
+
+        def save(*_):
+            val = {"font": fonts[font.get_selected()], "size": int(size.get_value()), "opacity": opac.get_value() / 100,
+                   "padding": int(pad.get_value()), "fetch": fetch.get_active()}
+            self.setting("terminal", val, "Terminal updated", delay=600)
+        font.connect("notify::selected", save)
+        for w in (size, opac, pad): w.connect("notify::value", save)
+        fetch.connect("notify::active", save)
+        for w in (font, size, opac, pad, fetch): g.add(w)
+        page.add(g)
+        g2 = Adw.PreferencesGroup(title="grimfetch colours")
+        fetch_colour_rows(g2, lambda m: self.toast.add_toast(Adw.Toast(title=m, timeout=2)))
+        row = Adw.ActionRow(title="Lines, art and everything else", subtitle="~/.config/grimfetch/config.toml, or 'grimsettings tui' > grimfetch")
+        b = Gtk.Button(label="Edit", valign=Gtk.Align.CENTER)
+        b.connect("clicked", lambda *_: subprocess.Popen(["grim-term", "-e", "grimsettings", "tui"]))
+        row.add_suffix(b); g2.add(row); page.add(g2)
+        return page
+
+    # ---------------------------------------------------------------- Shortcuts / About
+    def page_shortcuts(self):
+        page = self.page()
+        g = Adw.PreferencesGroup(title="Shortcuts", description="The same keys on every desktop. Super is the Windows key.")
+        for key, what in BINDS:
+            row = Adw.ActionRow(title=what)
+            row.add_suffix(Gtk.Label(label=key, valign=Gtk.Align.CENTER, css_classes=["monospace", "dim-label"]))
+            g.add(row)
+        page.add(g)
+        return page
+
+    def page_about(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
+        logo = Gtk.Picture.new_for_filename(str(SHARE / "logo.svg")); logo.set_size_request(150, 150)
+        box.append(logo)
+        box.append(Gtk.Label(label="Grim OS", css_classes=["big-title"]))
+        box.append(Gtk.Label(label=f"Version {VERSION}, based on Arch Linux"))
+        d = self.info.get("desktop")
+        box.append(Gtk.Label(label=f"Desktop: {d or 'unknown'}   ·   Rice: {self.info.get('name', '?')}", css_classes=["dim-label"]))
+        hint = Gtk.Label(label="grimhelp for help and apps · update to update · grimfetch for system info", css_classes=["dim-label"], wrap=True)
+        box.append(hint)
+        box.append(self.lowram_group())
+        return box
+
+    def lowram_group(self):
+        # Low-RAM mode: boot to a text console with nothing else running (grimmode)
+        grp = Adw.PreferencesGroup(title="Low-RAM mode", margin_top=12, width_request=420,
+                                   description="A text console with no desktop, network or background services. "
+                                               "There's also a Low RAM entry in the boot menu.")
+        try:
+            cur = subprocess.run(["systemctl", "get-default"], capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception:
+            cur = ""
+        sw = Adw.SwitchRow(title="Always start in low-RAM mode", subtitle="Type grimmode desktop to get the desktop back",
+                           active=cur == "grim-lowram.target")
+        def flip(row, _p):
+            want = "lowram" if row.get_active() else "desktop"
+            r = subprocess.run(["pkexec", "/usr/local/bin/grimmode", "boot", want], capture_output=True, text=True)
+            if r.returncode != 0:
+                row.handler_block(hid); row.set_active(not row.get_active()); row.handler_unblock(hid)
+                self.toast.add_toast(Adw.Toast(title="Not changed (no permission)"))
+            else:
+                self.toast.add_toast(Adw.Toast(title="Starts in low-RAM mode from the next boot" if want == "lowram" else "Starts the desktop as usual"))
+        hid = sw.connect("notify::active", flip)
+        grp.add(sw)
+        now = Adw.ActionRow(title="Switch to low-RAM mode now", subtitle="Closes the desktop and every app", activatable=True)
+        now.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        now.connect("activated", lambda *_: subprocess.Popen(["sh", "-c", "grim-term -e grimmode lowram || grim-de term -e grimmode lowram"]))
+        grp.add(now)
+        return grp
+
+
+class App(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="os.grim.Settings")
+
+    def do_activate(self):
+        prov = Gtk.CssProvider(); prov.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        (self.props.active_window or Window(self)).present()
+
+
+if __name__ == "__main__":
+    sys.exit(App().run(sys.argv[:1]))

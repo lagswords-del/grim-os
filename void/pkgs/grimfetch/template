@@ -1,0 +1,22 @@
+# Template file for 'grimfetch'
+# System info for Grim OS / Grim Void. build.sh copies grimos/grimfetch into files/src.
+pkgname=grimfetch
+version=1.2.0
+revision=1
+hostmakedepends="cargo"
+short_desc="System info with the Grim reaper or the Grim Void ring"
+maintainer="Grim OS <grimos@localhost>"
+license="MIT"
+homepage="https://voidlinux.org"
+
+do_extract() {
+	cp -a ${FILESDIR}/src/. .
+}
+
+do_build() {
+	cargo build --release --offline
+}
+
+do_install() {
+	vbin target/release/grimfetch
+}

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Grim Help
+Comment=Help pages and an app installer
+Exec=grimhelp
+Terminal=true
+Icon=help-browser
+Categories=System;

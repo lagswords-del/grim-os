@@ -1,0 +1,47 @@
+# grim-tools: set up Grim Void after install/update
+case "${ACTION}" in
+post)
+	# low-RAM mode = a runit runlevel with only the console logins
+	mkdir -p etc/runit/runsvdir/lowram
+	for s in agetty-tty1 agetty-tty2; do
+		[ -e "etc/runit/runsvdir/lowram/$s" ] || ln -sf "/etc/sv/$s" "etc/runit/runsvdir/lowram/$s"
+	done
+	# who we are (base-files' copy is skipped by /etc/xbps.d/90-grim.conf)
+	rm -f etc/os-release
+	cat > etc/os-release <<OSR
+NAME="Grim Void"
+PRETTY_NAME="Grim Void ${VERSION%_*}"
+ID=grimvoid
+ID_LIKE=void
+VERSION="${VERSION%_*}"
+VERSION_ID=${VERSION%_*}
+BUILD_ID=rolling
+ANSI_COLOR="0;31"
+HOME_URL="https://voidlinux.org/"
+LOGO=grimvoid
+OSR
+	cat > etc/issue <<'ISS'
+
+  \e{bold}Grim Void\e{reset} \e{red}\r\e{reset}   \n  \l
+
+ISS
+	# the system file, the first time
+	if [ ! -e etc/grim/system.conf ]; then
+		mkdir -p etc/grim
+		cp usr/share/grim/system.conf.example etc/grim/system.conf
+	fi
+	mkdir -p var/lib/grim
+	# the first line runit prints at boot
+	[ -f etc/runit/1 ] && sed -i 's/Welcome to Void!/Welcome to Grim Void!/' etc/runit/1
+	# sound: PipeWire with WirePlumber, the Pulse server, and ALSA apps routed into it
+	# (Void's documented setup; grim-session starts pipewire for each desktop)
+	mkdir -p etc/pipewire/pipewire.conf.d etc/alsa/conf.d
+	for f in 10-wireplumber.conf 20-pipewire-pulse.conf; do
+		[ -e usr/share/examples/pipewire/$f ] && ln -sf /usr/share/examples/pipewire/$f etc/pipewire/pipewire.conf.d/$f
+		[ -e usr/share/examples/wireplumber/$f ] && ln -sf /usr/share/examples/wireplumber/$f etc/pipewire/pipewire.conf.d/$f
+	done
+	for f in 50-pipewire.conf 99-pipewire-default.conf; do
+		[ -e usr/share/alsa/alsa.conf.d/$f ] && ln -sf /usr/share/alsa/alsa.conf.d/$f etc/alsa/conf.d/$f
+	done
+	;;
+esac

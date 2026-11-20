@@ -1,0 +1,22 @@
+The system file (/etc/grim/system.conf)
+=======================================
+Like NixOS, one file says what your system is. Change it, then:  sudo grimctl apply
+
+  hostname, timezone, keymap     applied straight away
+  desktop = icewm                starts on tty1 after login (ask = a numbered list, none = terminal)
+  boot = desktop | lowram        what Grim Void starts in
+  auto_update = daily            daily, weekly or off: grimctl update runs by itself
+  zram = 50%                     compressed swap in RAM (a % of RAM, a size like 4G, or off)
+  services = [ ... ]             runit services that run normally
+  packages = [ ... ]             your apps:
+      firefox                       a Void package
+      @flatpak:com.discordapp.Discord   an app from Flathub
+      @src:htop                     a Void recipe compiled on this PC
+      @src:https://github.com/a/b   any git project, compiled and packaged by grimctl
+
+It keeps itself in sync both ways:
+  - add a line -> installed           - delete a line -> uninstalled
+  - install with xbps-install -> added to the file at the next apply or update
+
+  sudo grimctl edit        open the file in your editor, then apply it
+  grimctl get KEY          print a value

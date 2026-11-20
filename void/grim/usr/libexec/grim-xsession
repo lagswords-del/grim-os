@@ -1,0 +1,24 @@
+#!/bin/sh
+# Started by grim-session through startx: the shared bits of every X11 desktop, then the WM.
+wm=$1
+xsetroot -cursor_name left_ptr
+setxkbmap "$(grimctl get keymap 2>/dev/null | sed 's/-.*//' || echo us)" 2>/dev/null
+grimctl wallpaper apply >/dev/null 2>&1
+command -v pipewire >/dev/null && ! pgrep -u "$(id -u)" -x pipewire >/dev/null && pipewire &
+command -v dunst >/dev/null && dunst &
+command -v nm-applet >/dev/null && [ "$wm" != dwm ] && nm-applet &
+case $wm in
+    dwm)
+        # dwm's status bar: time, battery, RAM
+        while :; do
+            bat=$(cat /sys/class/power_supply/BAT*/capacity 2>/dev/null | head -1)
+            mem=$(free -m | awk '/^Mem:/{print $3}')
+            xsetroot -name " RAM ${mem}M ${bat:+| BAT ${bat}% }| $(date '+%a %d %b %H:%M') "
+            sleep 20
+        done &
+        exec dbus-run-session dwm ;;
+    icewm)   exec dbus-run-session icewm-session ;;
+    openbox) exec dbus-run-session openbox-session ;;
+    i3)      exec dbus-run-session i3 ;;
+    *)       exec dbus-run-session "$wm" ;;
+esac

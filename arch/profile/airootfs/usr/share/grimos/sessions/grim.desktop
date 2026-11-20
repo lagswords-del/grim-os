@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Grim
+Comment=The Grim OS desktop: niri with Grim Shell
+Exec=/usr/local/bin/grim-de-session
+DesktopNames=Grim;niri

@@ -1,0 +1,59 @@
+# grimhelp's app list: category|name|what|kind:target
+#   kind: void = Void package, flatpak = Flathub app (for apps not built for musl), src = built on your PC
+Shells|fish|friendly shell with suggestions as you type|void:fish-shell
+Shells|zsh|powerful shell|void:zsh
+Shells|starship|fast prompt for any shell|void:starship
+Shells|zoxide|cd that learns your folders|void:zoxide
+Browsers|Firefox|web browser|void:firefox
+Browsers|Chromium|Google's open-source browser|flatpak:org.chromium.Chromium
+Browsers|Brave|browser with ad blocking|flatpak:com.brave.Browser
+Browsers|LibreWolf|private Firefox|flatpak:io.gitlab.librewolf-community
+Chat|Discord|voice and text chat|flatpak:com.discordapp.Discord
+Chat|Telegram|messenger|void:telegram-desktop
+Chat|Signal|private messenger|flatpak:org.signal.Signal
+Chat|Element|Matrix chat|flatpak:im.riot.Riot
+Music and video|grim-spotify|Spotify in the terminal: lyrics, cover art, playlists|void:spotify-player-grim
+Music and video|Spotify|Spotify's own app|flatpak:com.spotify.Client
+Music and video|ncspot|another terminal Spotify player|void:ncspot
+Music and video|mpv|video player|void:mpv
+Music and video|VLC|plays anything|void:vlc
+Music and video|OBS Studio|record and stream|void:obs
+Music and video|yt-dlp|download videos|void:yt-dlp
+Games|Steam|games|flatpak:com.valvesoftware.Steam
+Games|Prism Launcher|Minecraft|flatpak:org.prismlauncher.PrismLauncher
+Games|Lutris|game launcher|flatpak:net.lutris.Lutris
+Coding|Neovim|editor|void:neovim
+Coding|Vim|editor|void:vim
+Coding|VS Code|Microsoft's editor|flatpak:com.visualstudio.code
+Coding|git|version control|void:git
+Coding|lazygit|git in the terminal|void:lazygit
+Coding|tmux|terminal splits and sessions|void:tmux
+Coding|Podman|containers|void:podman
+Coding|Build tools|gcc, make, cmake, meson, cargo, go|void:base-devel cmake meson ninja cargo go
+Terminal tools|htop|see what's running|void:htop
+Terminal tools|btop|prettier htop|void:btop
+Terminal tools|fastfetch|system info|void:fastfetch
+Terminal tools|ripgrep|search inside files|void:ripgrep
+Terminal tools|fzf|fuzzy finder|void:fzf
+Terminal tools|bat|cat with colours|void:bat
+Terminal tools|eza|better ls|void:eza
+Terminal tools|yazi|file manager in the terminal|void:yazi
+Terminal tools|ranger|file manager in the terminal|void:ranger
+Terminal tools|nnn|tiny file manager|void:nnn
+Terminal tools|tldr|short command examples|void:tldr
+Desktop apps|Thunar|file manager|void:Thunar
+Desktop apps|PCManFM|light file manager|void:pcmanfm
+Desktop apps|GIMP|image editor|void:gimp
+Desktop apps|Inkscape|vector drawing|void:inkscape
+Desktop apps|LibreOffice|office suite|void:libreoffice
+Desktop apps|Obsidian|notes|flatpak:md.obsidian.Obsidian
+Desktop apps|KeePassXC|password manager|void:keepassxc
+Desktop apps|qBittorrent|torrents|void:qbittorrent
+Desktop apps|Zathura|PDF reader|void:zathura zathura-pdf-mupdf
+Desktop apps|imv|image viewer|void:imv
+Desktop apps|GParted|partition editor|void:gparted
+Desktop apps|pavucontrol|sound settings|void:pavucontrol
+Desktop apps|Blueman|Bluetooth|void:blueman bluez
+Terminals|kitty|GPU terminal|void:kitty
+Terminals|foot|fast Wayland terminal|void:foot
+Terminals|st|suckless terminal|void:st

@@ -1,0 +1,18 @@
+# Template file for 'grim-tools'
+# Grim Void's own commands, configs and artwork. build.sh copies grimvoid/grim/ into files/root.
+pkgname=grim-tools
+version=1.2.0
+revision=1
+depends="bash dialog pciutils usbutils util-linux procps-ng iputils NetworkManager grimfetch"
+short_desc="Grim Void: grimctl, grimhelp, grim-install, grim-wifi, desktop configs"
+maintainer="Grim OS <grimos@localhost>"
+license="MIT"
+homepage="https://voidlinux.org"
+conf_files="/etc/grimfetch.toml"
+make_dirs="/var/lib/grim 0755 root root"
+
+do_install() {
+	cp -a ${FILESDIR}/root/. ${DESTDIR}/
+	# the default config lives in /usr/share; the real one is made by INSTALL
+	rm -f ${DESTDIR}/etc/grim/system.conf
+}

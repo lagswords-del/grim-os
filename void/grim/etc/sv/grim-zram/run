@@ -1,0 +1,21 @@
+#!/bin/sh
+# Grim Void: compressed swap in RAM (zram). Size from "zram =" in /etc/grim/system.conf.
+exec 2>&1
+want=$(grimctl get zram 2>/dev/null); want=${want:-50%}
+[ "$want" = off ] && exec sv down grim-zram
+total=$(awk '/MemTotal/{print $2 * 1024}' /proc/meminfo)
+case $want in
+    *%) size=$(( total * ${want%\%} / 100 )) ;;
+    *)  size=$want ;;
+esac
+if ! grep -q '^/dev/zram0' /proc/swaps; then
+    modprobe zram num_devices=1 || exit 1
+    [ -e /sys/block/zram0 ] || exit 1
+    echo 1 > /sys/block/zram0/reset 2>/dev/null
+    # zstd packs best; lz4 is the fallback on kernels without it
+    echo zstd > /sys/block/zram0/comp_algorithm 2>/dev/null || echo lz4 > /sys/block/zram0/comp_algorithm
+    echo "$size" > /sys/block/zram0/disksize
+    mkswap -L zram0 /dev/zram0 >/dev/null && swapon -p 100 /dev/zram0
+    logger -t grim-zram "zram: $(( size / 1048576 )) MB ($want of RAM)" 2>/dev/null
+fi
+exec sleep infinity

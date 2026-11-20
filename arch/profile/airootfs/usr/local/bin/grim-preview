@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# grim-preview: try every Grim bar and dock live, in a window, without changing your desktop.
+#
+#   grim-preview                    go through all of them (Enter = next, b = back, q = quit)
+#   grim-preview STYLE              start at one style
+#   grim-preview --rice grim        use another rice's colours (grim, nord-snow, bone)
+#   grim-preview --auto 8           move on by itself every 8 seconds
+#
+# Styles: grim-shell classic reaper-pills red-island nord-pills frost-glass graphite-icons cachyos-minimal
+# It runs a separate niri inside a window with its own throwaway settings, and only ever
+# stops the programs it started itself.
+set -u
+GRIM_SHARE=${GRIM_SHARE:-/usr/share/grimos}
+GRIM_DE_SHARE=${GRIM_DE_SHARE:-/usr/share/grim-de}
+export GRIM_SHARE GRIM_DE_SHARE
+STYLES=(grim-shell classic reaper-pills red-island nord-pills frost-glass graphite-icons cachyos-minimal)
+declare -A NAME=([grim-shell]="Grim Shell bar + dock (Grim DE)" [classic]="Classic" [reaper-pills]="Reaper Pills"
+                 [red-island]="Red Island" [nord-pills]="Nord Pills" [frost-glass]="Frost Glass"
+                 [graphite-icons]="Graphite Icons" [cachyos-minimal]="CachyOS Minimal")
+declare -A WHAT=([grim-shell]="Grim DE's own Quickshell bar and dock, with glass and blur."
+                 [classic]="Full-width strip: date block, IP, disk, temperature. The Nord Snow bar."
+                 [reaper-pills]="Three floating pills, a reaper launcher and dot workspaces."
+                 [red-island]="Everything in one centred floating island."
+                 [nord-pills]="Three floating pills with numbered workspaces."
+                 [frost-glass]="A see-through floating bar with a thin accent outline."
+                 [graphite-icons]="Full strip, icons only, dot workspaces."
+                 [cachyos-minimal]="Launcher, workspace pill, bold clock, icons only.")
+
+RICE=nord-snow; AUTO=0; START=0
+while (($#)); do
+    case $1 in
+        --inside) INSIDE=1; shift ;;
+        --rice) RICE=$2; shift 2 ;;
+        --auto) AUTO=$2; shift 2 ;;
+        -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) for i in "${!STYLES[@]}"; do [[ ${STYLES[$i]} == "$1" ]] && START=$i; done; shift ;;
+    esac
+done
+
+# ------------------------------------------------------------------ outside: start the preview window
+if [[ -z ${INSIDE:-} ]]; then
+    [[ -n ${WAYLAND_DISPLAY:-} ]] || { echo "grim-preview needs a Wayland desktop (it opens a window)."; exit 1; }
+    for p in niri quickshell waybar alacritty grim-de grim-rice; do
+        command -v $p >/dev/null || { echo "grim-preview needs $p"; exit 1; }
+    done
+    TMPH=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/grim-preview.XXXXXX")
+    trap 'rm -rf "$TMPH"' EXIT
+    export HOME=$TMPH XDG_CONFIG_HOME=$TMPH/.config GRIM_DE_TEST=1
+    mkdir -p "$XDG_CONFIG_HOME/grim-de"
+    cat >"$XDG_CONFIG_HOME/grim-de/settings.json" <<EOF
+{"theme": "$RICE", "wallpaper": "$GRIM_SHARE/wallpapers/nord-snow.jpg",
+ "idle": {"dim": 0, "lock": 0, "screen_off": 0, "suspend": 0, "lock_on_suspend": false},
+ "dock": {"pinned": ["firefox", "Alacritty", "thunar", "obsidian", "steam"]}}
+EOF
+    grim-de apply >/dev/null 2>&1
+    grim-rice apply "$RICE" --desktop niri --no-reload >/dev/null 2>&1
+    # the preview's niri: Grim DE's config, but start the wallpaper and this script instead of the session
+    cfg=$XDG_CONFIG_HOME/grim-de/niri/config.kdl
+    sed -i '/^spawn-at-startup/d' "$cfg"
+    cat >>"$cfg" <<EOF
+spawn-at-startup "swaybg" "-i" "$GRIM_SHARE/wallpapers/nord-snow.jpg" "-m" "fill"
+spawn-at-startup "alacritty" "--config-file" "$XDG_CONFIG_HOME/grim-de/alacritty.toml" "--title" "Grim preview" "-e" "$0" "--inside" "--rice" "$RICE" "--auto" "$AUTO" "${STYLES[$START]}"
+EOF
+    echo "Opening the Grim preview window. Close it (or press q in its terminal) when you're done."
+    NIRI_CONFIG=$cfg XDG_CURRENT_DESKTOP=Grim:niri niri >"$TMPH/niri.log" 2>&1
+    exit 0
+fi
+
+# ------------------------------------------------------------------ inside the preview window
+PIDS=()
+stop_all() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; PIDS=(); sleep 0.3; }
+trap 'stop_all; niri msg action quit --skip-confirmation 2>/dev/null' EXIT
+
+show() {
+    local st=$1
+    stop_all
+    if [[ $st == grim-shell ]]; then
+        GRIM_DE=0 grim-de set bar.enabled true >/dev/null 2>&1
+        quickshell -p "$GRIM_DE_SHARE/shell" >/dev/null 2>&1 & PIDS+=($!)
+    else
+        grim-rice set bar_style "\"$st\"" --no-apply >/dev/null 2>&1
+        grim-rice apply "$RICE" --desktop niri --no-reload >/dev/null 2>&1
+        waybar -c "$XDG_CONFIG_HOME/grimos/waybar-niri.json" -s "$XDG_CONFIG_HOME/grimos/waybar.css" >/dev/null 2>&1 & PIDS+=($!)
+        # Grim's dock alongside every bar style
+        GRIM_DE=0 grim-de set bar.enabled false >/dev/null 2>&1
+        quickshell -p "$GRIM_DE_SHARE/shell" >/dev/null 2>&1 & PIDS+=($!)
+    fi
+}
+
+i=$START
+while :; do
+    st=${STYLES[$i]}
+    show "$st"
+    clear
+    printf '\n  \e[1;97mGRIM BAR PREVIEW\e[0m   %d of %d   (rice: %s)\n\n' $((i + 1)) ${#STYLES[@]} "$RICE"
+    printf '  \e[1;96m%s\e[0m\n  %s\n\n' "${NAME[$st]}" "${WHAT[$st]}"
+    if [[ $st == grim-shell ]]; then
+        printf '  Program: Quickshell (Grim Shell), Grim DE only.\n'
+    else
+        printf '  Program: Waybar here (Sway, Hyprland, Niri). On i3, Openbox and IceWM\n  the same style is drawn with Polybar.\n'
+    fi
+    printf '\n  Pick it for real: Grim Settings > Bars, or  grim-rice set bar_style \\"%s\\"\n' "$st"
+    printf '\n  \e[2mEnter = next   b = back   q = quit%s\e[0m\n  > ' "$( ((AUTO > 0)) && echo "   (moves on by itself every ${AUTO}s)")"
+    key=""
+    if ((AUTO > 0)); then read -r -t "$AUTO" key; else read -r key; fi
+    case $key in
+        q|Q) break ;;
+        b|B) i=$(( (i - 1 + ${#STYLES[@]}) % ${#STYLES[@]} )) ;;
+        *) i=$(( (i + 1) % ${#STYLES[@]} )) ;;
+    esac
+done

@@ -1,0 +1,11 @@
+#!/bin/sh
+# grim-power: lock, log out, suspend, reboot or shut down.
+choice=$(printf '  Lock\n  Log out\n  Suspend\n  Reboot\n  Shut down\n' | rofi -dmenu -i -p "Power" -lines 5) || exit 0
+case "$choice" in
+    *Lock)
+        if [ -n "$WAYLAND_DISPLAY" ]; then swaylock -f -c 000000; else i3lock -c 000000; fi ;;
+    *"Log out") loginctl terminate-session "${XDG_SESSION_ID:-self}" ;;
+    *Suspend) systemctl suspend ;;
+    *Reboot) systemctl reboot ;;
+    *"Shut down") systemctl poweroff ;;
+esac

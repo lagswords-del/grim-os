@@ -1,0 +1,58 @@
+#!/bin/bash
+# grim-spotify: Spotify in the terminal (built on spotify-player), in Grim colours,
+# with cover art, lyrics, playlists and search.
+#   grim-spotify          open the player
+#   grim-spotify keys     the key list
+#   grim-spotify login    sign in to Spotify again
+#   grim-spotify play|pause|next|prev|status   control it from anywhere (another terminal, a keybind)
+R=$'\e[31m' B=$'\e[1;97m' G=$'\e[90m' N=$'\e[0m'
+CFG=${XDG_CONFIG_HOME:-$HOME/.config}/spotify-player
+
+keys() {
+cat <<K
+${B}grim-spotify keys${N}
+  ${R}space${N}  play / pause         ${R}n${N} / ${R}p${N}   next / previous song
+  ${R}>${N} / ${R}<${N}  fast forward / back  ${R}^${N}       back to the start
+  ${R}+${N} / ${R}-${N}  volume               ${R}_${N}       mute
+  ${R}C-s${N}    shuffle              ${R}C-r${N}     repeat
+  ${R}l${N}      lyrics               ${R}u p${N}     your playlists
+  ${R}g y${N}    liked songs          ${R}g r${N}     recently played
+  ${R}g t${N}    top songs            ${R}u a${N} / ${R}u A${N} artists / albums
+  ${R}/${N}      search here          ${R}g s${N}     search all of Spotify
+  ${R}z${N}      the queue            ${R}Z${N}       add the selected song to the queue
+  ${R}a${N}      actions on this song (like, add to playlist, go to artist...)
+  ${R}D${N}      choose the device    ${R}enter${N}   play the selected item
+  ${R}j${N} / ${R}k${N}  move down / up       ${R}tab${N}     next panel
+  ${R}?${N}      every key            ${R}q${N}       quit
+K
+}
+
+command -v spotify_player >/dev/null || {
+    echo "The Spotify player isn't installed. Install it with:  grimctl install spotify-player-grim"
+    exit 1
+}
+
+# first run: Grim's settings and theme (yours are never overwritten)
+mkdir -p "$CFG"
+[[ -e $CFG/app.toml ]]   || cp /usr/share/grim/spotify/app.toml "$CFG/app.toml"
+[[ -e $CFG/theme.toml ]] || cp /usr/share/grim/spotify/theme.toml "$CFG/theme.toml"
+
+case ${1:-} in
+    keys|-k|--keys) keys; exit ;;
+    login) exec spotify_player authenticate ;;
+    play|pause) exec spotify_player playback play-pause ;;
+    next) exec spotify_player playback next ;;
+    prev|previous) exec spotify_player playback previous ;;
+    status) exec spotify_player get key playback ;;
+    -h|--help|help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit ;;
+esac
+
+if [[ ! -e $HOME/.cache/spotify-player/credentials.json ]]; then
+    printf '%sFirst time:%s Spotify only lets other players play music with %sSpotify Premium%s.\n' "$B" "$N" "$R" "$N"
+    echo "A browser link will open (or be printed) to sign in to your Spotify account."
+    echo
+    keys
+    read -rp "Press Enter to sign in..." _
+    spotify_player authenticate || exit 1
+fi
+exec spotify_player "$@"

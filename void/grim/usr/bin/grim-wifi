@@ -1,0 +1,99 @@
+#!/bin/bash
+# grim-wifi: finds your Wi-Fi hardware, tells you if a driver or firmware is missing,
+# then lists networks by number so you can join one.
+#   grim-wifi            detect, scan, pick a number, connect
+#   grim-wifi --detect   only report the hardware
+#   grim-wifi --check    exit 0 if we're online
+R=$'\e[31m' B=$'\e[1;97m' G=$'\e[90m' N=$'\e[0m'
+
+online() { ping -c1 -W3 1.1.1.1 >/dev/null 2>&1 || ping -c1 -W3 9.9.9.9 >/dev/null 2>&1; }
+[[ ${1:-} == --check ]] && { online; exit; }
+
+as_root() { if ((EUID == 0)); then "$@"; else sudo "$@"; fi; }
+
+# --- hardware: every wireless PCI/USB device, its driver, and firmware trouble
+detect() {
+    local found=0 ifs
+    ifs=$(for d in /sys/class/net/*; do [[ -d $d/wireless || -L $d/phy80211 ]] && basename "$d"; done)
+    printf '%sWi-Fi hardware%s\n' "$B" "$N"
+    while IFS= read -r line; do
+        [[ -z $line ]] && continue
+        found=1
+        local slot=${line%% *} name=${line#* } drv
+        drv=$(lspci -k -s "$slot" 2>/dev/null | sed -n 's/.*Kernel driver in use: //p')
+        if [[ -n $drv ]]; then printf '  %s✓%s %s  %s(driver %s)%s\n' "$R" "$N" "$name" "$G" "$drv" "$N"
+        else
+            printf '  %s✗%s %s  %s(no driver loaded)%s\n' "$R" "$N" "$name" "$G" "$N"
+            case $name in
+                *Broadcom*|*BCM43*) echo "    Broadcom: try the linux-firmware-broadcom package; some need b43-firmware (grimctl install b43-firmware)" ;;
+                *Realtek*) echo "    Realtek: needs linux-firmware-network; a few USB ones need a driver built from source (grimctl build)" ;;
+                *) echo "    It may need firmware: grimctl install linux-firmware-network" ;;
+            esac
+        fi
+    done < <(lspci -mm 2>/dev/null | awk -F'"' '/Network controller|Wireless/ {print substr($0,1,7) " " $4 " " $6}')
+    while IFS= read -r line; do [[ -n $line ]] && { found=1; printf '  %s•%s USB: %s\n' "$R" "$N" "$line"; }; done \
+        < <(lsusb 2>/dev/null | grep -iE 'wireless|wi-?fi|802\.11|wlan|rtl8|mt76|ath9k' | grep -vi bluetooth | sed 's/^.*ID [0-9a-f:]* //')
+    ((found)) || echo "  none found (a wired cable works too)"
+    # firmware the kernel asked for and couldn't find
+    if dmesg 2>/dev/null | grep -iE 'firmware.*(failed|not found|error -2)' | grep -iE 'iwlwifi|ath|rtw|rtl|mt7|brcm|b43' | tail -3 | grep -q .; then
+        printf '  %sThe kernel is missing Wi-Fi firmware:%s\n' "$R" "$N"
+        dmesg | grep -iE 'firmware.*(failed|not found|error -2)' | grep -iE 'iwlwifi|ath|rtw|rtl|mt7|brcm|b43' | tail -3 | sed 's/^/    /'
+        echo "    Fix: grimctl install linux-firmware-network   (or plug in a cable first)"
+    fi
+    [[ -n $ifs ]] && printf '  interfaces: %s\n' "$(echo $ifs)"
+    if rfkill list wifi 2>/dev/null | grep -q 'blocked: yes'; then
+        printf '  %sWi-Fi is switched off (rfkill).%s Turning it on...\n' "$R" "$N"; as_root rfkill unblock wifi
+    fi
+    echo
+    [[ -n $ifs ]]
+}
+
+[[ ${1:-} == --detect ]] && { detect; exit; }
+
+detect || { online && echo "You're online through a cable." ; exit 0; }
+
+if ! command -v nmcli >/dev/null || ! nmcli -t general status >/dev/null 2>&1; then
+    echo "Starting NetworkManager..."
+    [[ -d /etc/sv/NetworkManager ]] || { echo "NetworkManager isn't installed."; exit 1; }
+    [[ -e /var/service/NetworkManager ]] || as_root ln -s /etc/sv/NetworkManager /var/service/
+    for _ in 1 2 3 4 5 6 7 8; do nmcli -t general status >/dev/null 2>&1 && break; sleep 1; done
+fi
+
+while :; do
+    printf '%sScanning...%s\n' "$G" "$N"
+    nmcli dev wifi rescan >/dev/null 2>&1; sleep 2
+    mapfile -t nets < <(nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list 2>/dev/null \
+        | awk -F: '$4 != "" && !seen[$4]++' | sort -t: -k2,2nr | head -20)
+    if ((${#nets[@]} == 0)); then
+        echo "No networks found."
+    else
+        printf '\n%s  #  Signal  Lock  Network%s\n' "$B" "$N"
+        for i in "${!nets[@]}"; do
+            IFS=: read -r use sig sec ssid <<<"${nets[$i]}"
+            bars=$(( sig >= 75 ? 4 : sig >= 50 ? 3 : sig >= 25 ? 2 : 1 ))
+            printf '  %s%2d%s  %-6s  %-4s  %s%s\n' "$R" $((i + 1)) "$N" "$(printf '%.*s' $bars '▂▄▆█')" \
+                "$([[ -n $sec && $sec != -- ]] && echo '🔒' || echo ' ')" "$ssid" "$([[ $use == '*' ]] && echo "  ${G}(connected)${N}")"
+        done
+    fi
+    printf '\n  %sr%s scan again   %sh%s hidden network   %s0%s done\n' "$R" "$N" "$R" "$N" "$R" "$N"
+    read -rp "Pick a number: " pick
+    case $pick in
+        0|q|"") break ;;
+        r) continue ;;
+        h) read -rp "Network name: " ssid; read -rsp "Password (empty if open): " pw; echo
+           nmcli dev wifi connect "$ssid" ${pw:+password "$pw"} hidden yes && break ;;
+        *[!0-9]*) echo "Type a number." ;;
+        *) ((pick >= 1 && pick <= ${#nets[@]})) || { echo "No network $pick."; continue; }
+           IFS=: read -r _ _ sec ssid <<<"${nets[$((pick - 1))]}"
+           if nmcli -t -f NAME connection show | grep -qxF "$ssid"; then
+               nmcli connection up "$ssid" && break
+           elif [[ -n $sec && $sec != -- ]]; then
+               read -rsp "Password for $ssid: " pw; echo
+               nmcli dev wifi connect "$ssid" password "$pw" && break
+           else
+               nmcli dev wifi connect "$ssid" && break
+           fi
+           echo "That didn't work. Check the password and try again." ;;
+    esac
+done
+online && printf '%sOnline.%s\n' "$R" "$N"

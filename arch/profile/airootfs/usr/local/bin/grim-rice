@@ -1,0 +1,1573 @@
+#!/usr/bin/env python3
+"""grim-rice: Grim OS rices for every desktop.
+
+  grim-rice list                         rices and which one is in use
+  grim-rice current                      id of the rice in use
+  grim-rice desktops                     installed desktops (and the one running)
+  grim-rice apply <id> [--desktop D | --all] [--no-reload]
+  grim-rice dock on|off                  show or hide the dock, then re-apply
+  grim-rice bar top|bottom               move the bar, then re-apply
+  grim-rice session <desktop>            started at login: wallpaper, bar, dock, notifications
+
+A rice (/usr/share/grimos/rices/<id>.json) is a palette, font, wallpaper and a few
+layout numbers. This script turns it into each desktop's own config files, with the
+same keys everywhere:
+  Super+T      toggle floating (maximize on floating-only desktops)
+  Super+Q      close window
+  Super+Space  app finder
+  Super+Return terminal          Super+F1  Grim Settings
+  Print        screenshot: drag an area
+  Super+left-drag move a window, Super+right-drag resize it
+"""
+import json, os, re, shutil, subprocess, sys
+from pathlib import Path
+
+SHARE = Path(os.environ.get("GRIM_SHARE", "/usr/share/grimos"))
+RICES = SHARE / "rices"
+WALLS = SHARE / "wallpapers"
+HOME = Path.home()
+CFG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
+STATE = CFG / "grimos" / "rice.json"
+GEN = CFG / "grimos"          # generated bar/compositor/notification configs live here
+
+DESKTOPS = {  # id: (binary that proves it is installed, display name, kind)
+    "i3": ("i3", "i3", "x11-wm"),
+    "openbox": ("openbox", "Openbox", "x11-wm"),
+    "icewm": ("icewm", "IceWM", "x11-wm"),
+    "xfce": ("xfce4-session", "XFCE", "de"),
+    "sway": ("sway", "Sway", "wl-wm"),
+    "hyprland": ("Hyprland", "Hyprland", "wl-wm"),
+    "niri": ("niri", "Niri", "wl-wm"),
+    "gnome": ("gnome-shell", "GNOME", "de"),
+    "kde": ("plasmashell", "KDE Plasma", "de"),
+    "cosmic": ("cosmic-comp", "COSMIC", "de"),
+}
+
+# Nerd Font glyphs used by the bars
+IC = {"vol": "", "mute": "", "kbd": "", "wifi": "", "eth": "",
+      "disk": "", "temp": "", "mem": "", "bat": "", "chg": "",
+      "power": "", "dot": "", "ring": "",
+      "skull": "\U000f068c", "sun": "\uf185", "wifi_off": "\U000f092e", "gear": "\uf013",
+      "bell": "\uf0f3", "bell_off": "\uf1f6", "update": "\uf021", "gauge": "\uf0e4",
+      "bat0": "\uf244", "bat1": "\uf243", "bat2": "\uf242", "bat3": "\uf241"}
+
+
+# ------------------------------------------------------------------ helpers
+USER_RICES = CFG / "grimos" / "rices"     # rices saved from Grim Settings
+
+BAR_STYLES = {  # id: (name, description)
+    "classic": ("Classic", "Full-width strip: date block, IP, disk, temperature. The Nord Snow bar."),
+    "reaper-pills": ("Reaper Pills", "Three floating pills, a reaper launcher and dot workspaces."),
+    "red-island": ("Red Island", "Everything in one centred floating island."),
+    "nord-pills": ("Nord Pills", "Three floating pills with numbered workspaces."),
+    "frost-glass": ("Frost Glass", "A see-through floating bar with a thin accent outline."),
+    "graphite-icons": ("Graphite Icons", "Full strip, icons only, dot workspaces."),
+    "cachyos-minimal": ("CachyOS Minimal", "Launcher, workspace pill, bold clock, icons only."),
+}
+BAR_MODULES = ["volume", "network", "battery", "cpu", "memory", "updates", "tray", "power"]
+DEFAULT_MODULES = ["volume", "network", "battery", "updates", "tray", "power"]
+SETTABLE = {"bar_style", "bar_height", "bar_modules", "clock24", "bar_position", "dock", "dock_position",
+            "dock_size", "dock_autohide", "wallpaper", "wallpaper_mode", "colors", "terminal"}
+
+
+def rice_path(rid):
+    for d in (USER_RICES, RICES):
+        if (d / f"{rid}.json").exists():
+            return d / f"{rid}.json"
+    return None
+
+
+def load_rice(rid):
+    """The rice, with everything changed in Grim Settings layered on top."""
+    p = rice_path(rid)
+    if not p:
+        sys.exit(f"grim-rice: no rice called '{rid}'. Try: grim-rice list")
+    r = json.loads(p.read_text())
+    r["id"] = rid
+    st = state()
+    for k in ("dock", "bar_position"):
+        if st.get(k) is not None:
+            r[k] = st[k]
+    r["colors"] = {**r["colors"], **(st.get("colors") or {})}
+    wall = st.get("wallpaper") or str(WALLS / r["wallpaper"])
+    r["wall"] = wall if os.path.exists(wall) else str(WALLS / r["wallpaper"])
+    r["wall_mode"] = st.get("wallpaper_mode", "fill")
+    t = {"font": r["font"], "size": r["font_size"], "opacity": 1.0, "padding": 12, "fetch": False}
+    t.update(st.get("terminal") or {})
+    r["term"] = t
+    r["bar_style"] = st.get("bar_style") or r.get("bar_style")    # None = per desktop default
+    r["bar_height"] = int(st.get("bar_height") or 28)
+    r["bar_modules"] = st.get("bar_modules") or DEFAULT_MODULES
+    r["clock24"] = st.get("clock24", True)
+    r["dock_position"] = st.get("dock_position", "bottom")
+    r["dock_size"] = int(st.get("dock_size") or 44)
+    r["dock_autohide"] = bool(st.get("dock_autohide", False))
+    return r
+
+
+def bar_style_for(r, wm):
+    return r["bar_style"] if r["bar_style"] in BAR_STYLES else ("cachyos-minimal" if wm == "icewm" else "classic")
+
+
+def all_rices():
+    out = []
+    for d in (RICES, USER_RICES):
+        for p in sorted(d.glob("*.json")) if d.exists() else []:
+            try:
+                x = json.loads(p.read_text()); x["id"] = p.stem; x["user"] = d == USER_RICES; out.append(x)
+            except Exception:
+                pass
+    return sorted(out, key=lambda d: (d.get("user", False), d.get("order", 99)))
+
+
+def state():
+    try:
+        return json.loads(STATE.read_text())
+    except Exception:
+        return {}
+
+
+def save_state(**kw):
+    st = state(); st.update(kw)
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = STATE.with_suffix(".tmp"); tmp.write_text(json.dumps(st, indent=2)); tmp.replace(STATE)
+
+
+def installed():
+    return [d for d, (binary, _, _) in DESKTOPS.items() if shutil.which(binary)]
+
+
+def running():
+    cur = (os.environ.get("XDG_CURRENT_DESKTOP", "") + ":" + os.environ.get("DESKTOP_SESSION", "")).lower()
+    for key, names in [("hyprland", ["hyprland"]), ("niri", ["niri"]), ("sway", ["sway"]), ("i3", ["i3"]),
+                       ("openbox", ["openbox"]), ("icewm", ["icewm"]), ("xfce", ["xfce"]),
+                       ("gnome", ["gnome"]), ("kde", ["kde", "plasma"]), ("cosmic", ["cosmic"])]:
+        if any(n in cur for n in names):
+            return key
+    return None
+
+
+def write(path, text, mode=0o644):
+    path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".grimtmp"); tmp.write_text(text); os.chmod(tmp, mode); tmp.replace(path)
+
+
+def backup_once(path):
+    """Keep the user's own file the first time Grim overwrites it."""
+    path = Path(path)
+    if path.exists() and not path.with_name(path.name + ".pre-grim").exists():
+        txt = path.read_text(errors="ignore")
+        if "Grim OS" not in txt:
+            shutil.copy2(path, path.with_name(path.name + ".pre-grim"))
+
+
+def run(*cmd, quiet=True):
+    try:
+        return subprocess.run(cmd, stdout=subprocess.DEVNULL if quiet else None,
+                              stderr=subprocess.DEVNULL if quiet else None, timeout=20).returncode
+    except Exception:
+        return 1
+
+
+def spawn(*cmd):
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except FileNotFoundError:
+        pass
+
+
+def hx(c):  # "#rrggbb" -> "rrggbb"
+    return c.lstrip("#")
+
+
+def rgba(c, a="ff"):
+    return f"rgba({hx(c)}{a})"
+
+
+def ansi(r):
+    """16 terminal colours that suit the rice."""
+    c = r["colors"]
+    if r["id"] == "nord-snow":
+        return ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0",
+                "#4c566a", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#8fbcbb", "#eceff4"]
+    if r.get("dark", True):
+        return ["#1f1f23", c["accent"], "#7fa86b", "#d6a85c", "#6f8fb5", "#a97ab0", "#6fa8a8", "#cfcfcf",
+                "#3a3a40", c.get("accent2", c["accent"]), "#98c283", "#e8c27a", "#8aa9cf", "#c495ca", "#8cc4c4", "#ffffff"]
+    return ["#161616", "#c1121f", "#3f7a2e", "#946200", "#2f5d8a", "#7a3f86", "#2c7372", "#d3d1c9",
+            "#4a4a4a", "#e0323f", "#4f9a3a", "#b37a00", "#3c76ad", "#9a52a8", "#389290", "#ecebe6"]
+
+
+# ------------------------------------------------------------------ shared app configs
+def gen_common(r):
+    c = r["colors"]; a = ansi(r); f = r["font"]; fs = r["font_size"]
+    t = r["term"]; tf, tfs, op, pad = t["font"], t["size"], float(t["opacity"]), int(t["padding"])
+    # Terminals
+    names = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"]
+    normal = "\n".join(f'{n} = "{a[i]}"' for i, n in enumerate(names))
+    bright = "\n".join(f'{n} = "{a[i + 8]}"' for i, n in enumerate(names))
+    write(CFG / "alacritty/alacritty.toml", f"""# Grim OS rice: {r['name']} (written by grim-rice, changes are overwritten)
+[window]
+padding = {{ x = {pad}, y = {max(pad - 2, 0)} }}
+decorations = "None"
+opacity = {op:.2f}
+
+[font]
+size = {tfs}
+normal = {{ family = "{tf}" }}
+
+[colors.primary]
+background = "{c['bg']}"
+foreground = "{c['fg']}"
+
+[colors.cursor]
+text = "{c['bg']}"
+cursor = "{c['accent']}"
+
+[colors.normal]
+{normal}
+
+[colors.bright]
+{bright}
+""")
+    write(CFG / "foot/foot.ini", f"""# Grim OS rice: {r['name']}
+[main]
+font={tf}:size={tfs}
+pad={pad}x{max(pad - 2, 0)}
+
+[colors]
+alpha={op:.2f}
+background={hx(c['bg'])}
+foreground={hx(c['fg'])}
+""" + "".join(f"regular{i}={hx(a[i])}\n" for i in range(8)) + "".join(f"bright{i}={hx(a[i + 8])}\n" for i in range(8)))
+    kitty = f"# Grim OS rice: {r['name']}\nfont_family {tf}\nfont_size {tfs}\nwindow_padding_width {pad}\nbackground_opacity {op:.2f}\n" \
+            f"background {c['bg']}\nforeground {c['fg']}\ncursor {c['accent']}\n" \
+            + "".join(f"color{i} {a[i]}\n" for i in range(16))
+    write(CFG / "kitty/grim-theme.conf", kitty)
+    kc = CFG / "kitty/kitty.conf"
+    if not kc.exists() or "grim-theme.conf" not in kc.read_text():
+        with open(kc, "a") as fh:
+            fh.write("\n# Grim OS colours\ninclude grim-theme.conf\n")
+
+    # grimfetch when a terminal opens (Terminal page)
+    rc = HOME / ".bashrc"
+    try:
+        txt = rc.read_text() if rc.exists() else ""
+        block = "# >>> grimfetch (Grim Settings) >>>\n[ -n \"$PS1\" ] && [ -z \"$GRIM_BANNER_SHOWN\" ] && command -v grimfetch >/dev/null && grimfetch\n# <<< grimfetch <<<\n"
+        txt = re.sub(r"# >>> grimfetch \(Grim Settings\) >>>.*?# <<< grimfetch <<<\n", "", txt, flags=re.S)
+        if t.get("fetch"):
+            txt = txt.rstrip("\n") + "\n\n" + block
+        rc.write_text(txt)
+    except OSError:
+        pass
+
+    # App finder
+    write(CFG / "rofi/config.rasi", f"""/* Grim OS rice: {r['name']} */
+configuration {{
+    modes: "drun,run,window";
+    show-icons: true;
+    icon-theme: "{r['icon_theme']}";
+    display-drun: "";
+    drun-display-format: "{{name}}";
+}}
+* {{ bg: {c['bg2']}; bg3: {c['bg3']}; fg: {c['fg']}; mu: {c['muted']}; ac: {c['accent']}; af: {c['accent_fg']};
+    background-color: transparent; text-color: @fg; font: "{f} {fs + 1}"; }}
+window {{ width: 560px; background-color: @bg; border: {r['border']}px; border-color: @ac; border-radius: {r['radius']}px; padding: 14px; }}
+inputbar {{ children: [prompt, entry]; spacing: 10px; padding: 8px 10px; background-color: @bg3; border-radius: {max(r['radius'] - 2, 0)}px; }}
+prompt {{ text-color: @ac; }}
+entry {{ placeholder: "Search apps"; placeholder-color: @mu; }}
+listview {{ lines: 8; spacing: 2px; margin: 10px 0 0 0; scrollbar: false; }}
+element {{ padding: 7px 10px; spacing: 10px; border-radius: {max(r['radius'] - 2, 0)}px; }}
+element selected {{ background-color: @ac; text-color: @af; }}
+element-text {{ text-color: inherit; vertical-align: 0.5; }}
+element-icon {{ size: 22px; }}
+""")
+    # Notifications
+    write(CFG / "dunst/dunstrc", f"""# Grim OS rice: {r['name']}
+[global]
+font = {f} {fs}
+frame_width = {r['border']}
+frame_color = "{c['accent']}"
+corner_radius = {r['radius']}
+offset = (14, 40)
+background = "{c['bg2']}"
+foreground = "{c['fg']}"
+[urgency_critical]
+frame_color = "{c['urgent']}"
+background = "{c['bg2']}"
+foreground = "{c['fg']}"
+""")
+    write(CFG / "mako/config", f"""# Grim OS rice: {r['name']}
+font={f} {fs}
+background-color={c['bg2']}
+text-color={c['fg']}
+border-color={c['accent']}
+border-size={r['border']}
+border-radius={r['radius']}
+default-timeout=6000
+""")
+    # GTK apps
+    for v in ("gtk-3.0", "gtk-4.0"):
+        write(CFG / v / "settings.ini", f"""[Settings]
+gtk-theme-name={r['gtk_theme']}
+gtk-icon-theme-name={r['icon_theme']}
+gtk-font-name=Noto Sans 10
+gtk-application-prefer-dark-theme={'true' if r.get('dark', True) else 'false'}
+""")
+
+
+# ------------------------------------------------------------------ bars
+def classic_right(r):
+    m = r["bar_modules"]
+    out = (["wlan", "eth"] if "network" in m else []) + ["fs", "temperature"]
+    out += [x for k, x in (("memory", "memory"), ("battery", "battery"), ("tray", "tray"), ("power", "power")) if k in m]
+    return out
+
+
+def gen_polybar(r, wm):
+    c = r["colors"]; f = r["font"]; fs = r["font_size"]
+    ws = "internal/i3" if wm == "i3" else "internal/xworkspaces"
+    ws_block = f"""[module/workspaces]
+type = {ws}
+pin-workspaces = true
+label-focused = " %name% "
+label-focused-background = {c['accent']}
+label-focused-foreground = {c['accent_fg']}
+label-unfocused = " %name% "
+label-visible = " %name% "
+label-urgent = " %name% "
+label-urgent-background = {c['urgent']}
+""" if wm == "i3" else f"""[module/workspaces]
+type = {ws}
+label-active = " %name% "
+label-active-background = {c['accent']}
+label-active-foreground = {c['accent_fg']}
+label-occupied = " %name% "
+label-empty = " %name% "
+label-empty-foreground = {c['muted']}
+label-urgent = " %name% "
+"""
+    write(GEN / "polybar.ini", f"""; Grim OS rice: {r['name']} (written by grim-rice)
+[colors]
+bg = {c['bg2']}
+fg = {c['fg']}
+mu = {c['muted']}
+ac = {c['accent']}
+af = {c['accent_fg']}
+lab = {c.get('accent2', c['accent'])}
+
+[bar/grim]
+width = 100%
+height = 26
+bottom = {'true' if r['bar_position'] == 'bottom' else 'false'}
+background = ${{colors.bg}}
+foreground = ${{colors.fg}}
+font-0 = "{f}:size={fs};3"
+padding-left = 1
+padding-right = 1
+module-margin = 1
+modules-left = workspaces {"volume " if "volume" in r["bar_modules"] else ""}keyboard
+modules-center = date
+modules-right = {" ".join(classic_right(r))}
+cursor-click = pointer
+enable-ipc = true
+{'wm-restack = i3' if wm == 'i3' else 'wm-restack = generic'}
+override-redirect = false
+
+{ws_block}
+[module/volume]
+type = custom/script
+exec = grim-volume
+interval = 2
+click-left = pactl set-sink-mute @DEFAULT_SINK@ toggle
+scroll-up = pactl set-sink-volume @DEFAULT_SINK@ +5%
+scroll-down = pactl set-sink-volume @DEFAULT_SINK@ -5%
+format-prefix = "{IC['vol']} "
+format-prefix-foreground = ${{colors.mu}}
+
+[module/keyboard]
+type = internal/xkeyboard
+format = <label-layout>
+label-layout = %layout%
+label-layout-foreground = ${{colors.ac}}
+blacklist-0 = num lock
+blacklist-1 = scroll lock
+
+[module/date]
+type = internal/date
+interval = 5
+date = %A, %B %d %Y
+time = {"%H:%M" if r["clock24"] else "%I:%M %p"}
+label = "  %date%  %time%  "
+label-background = ${{colors.ac}}
+label-foreground = ${{colors.af}}
+
+[module/wlan]
+type = internal/network
+interface-type = wireless
+label-connected = %local_ip%
+format-connected-prefix = "{IC['wifi']} "
+format-connected-prefix-foreground = ${{colors.mu}}
+label-disconnected =
+
+[module/eth]
+type = internal/network
+interface-type = wired
+label-connected = %local_ip%
+format-connected-prefix = "{IC['eth']} "
+format-connected-prefix-foreground = ${{colors.mu}}
+label-disconnected =
+
+[module/fs]
+type = internal/fs
+mount-0 = /
+label-mounted = / %percentage_used%%
+
+[module/temperature]
+type = internal/temperature
+warn-temperature = 80
+format-prefix = "{IC['temp']} "
+format-prefix-foreground = ${{colors.mu}}
+label = %temperature-c%
+
+[module/memory]
+type = internal/memory
+format-prefix = "{IC['mem']} "
+format-prefix-foreground = ${{colors.mu}}
+label = %percentage_used%%
+
+[module/battery]
+type = internal/battery
+full-at = 99
+format-charging-prefix = "{IC['chg']} "
+format-discharging-prefix = "{IC['bat']} "
+format-full-prefix = "{IC['bat']} "
+label-charging = %percentage%%
+label-discharging = %percentage%%
+label-full = %percentage%%
+
+[module/tray]
+type = internal/tray
+tray-spacing = 6
+
+[module/power]
+type = custom/text
+label = {IC['power']}
+label-foreground = ${{colors.ac}}
+click-left = grim-power
+""")
+
+
+def gen_polybar_minimal(r):
+    """The 'minimal' bar from the author's CachyOS rice: launcher, workspace pill, centred clock,
+    icon-only status on the right, power in red. Used on IceWM (its taskbar is hidden)."""
+    c = r["colors"]; f = r["font"]; fs = r["font_size"]
+    L, R = "\ue0b6", "\ue0b4"   # rounded pill ends
+    pill = lambda txt: f"%{{F{c['accent']}}}{L}%{{F{c['accent_fg']} B{c['accent']}}}{txt}%{{B- F{c['accent']}}}{R}%{{F-}}"
+    write(GEN / "polybar-minimal.ini", f"""; Grim OS rice: {r['name']}, minimal layout (written by grim-rice)
+[colors]
+bg = {c['bg']}
+fg = {c['fg']}
+mu = {c['muted']}
+ac = {c['accent']}
+red = {c['urgent']}
+
+[bar/grim]
+width = 100%
+height = 31
+bottom = {'true' if r['bar_position'] == 'bottom' else 'false'}
+background = ${{colors.bg}}
+foreground = ${{colors.fg}}
+font-0 = "{f}:size={fs};3"
+font-1 = "{f}:size={fs + 2}:weight=bold;3"
+padding-left = 2
+padding-right = 2
+module-margin = 1
+modules-left = launcher workspaces
+modules-center = clock
+modules-right = backlight wlan eth volume settings battery notifications updates monitor power
+cursor-click = pointer
+enable-ipc = true
+wm-restack = generic
+
+[module/launcher]
+type = custom/text
+label = {IC['skull']}
+label-foreground = ${{colors.ac}}
+click-left = grim-apps
+
+[module/workspaces]
+type = internal/xworkspaces
+label-active = "{pill(' %name% ')}"
+label-occupied = " %name% "
+label-occupied-foreground = ${{colors.fg}}
+label-empty = " %name% "
+label-empty-foreground = ${{colors.mu}}
+label-urgent = " %name% "
+label-urgent-foreground = ${{colors.red}}
+
+[module/clock]
+type = internal/date
+interval = 5
+date = %H:%M
+label = %{{T2}}%date%%{{T-}}
+
+[module/backlight]
+type = custom/script
+exec = grim-backlight
+interval = 5
+
+[module/wlan]
+type = internal/network
+interface-type = wireless
+label-connected = {IC['wifi']}
+label-disconnected = {IC['wifi_off']}
+label-disconnected-foreground = ${{colors.mu}}
+
+[module/eth]
+type = internal/network
+interface-type = wired
+label-connected = {IC['eth']}
+label-disconnected =
+
+[module/volume]
+type = custom/script
+exec = grim-volume --icon
+interval = 2
+click-left = pactl set-sink-mute @DEFAULT_SINK@ toggle
+scroll-up = pactl set-sink-volume @DEFAULT_SINK@ +5%
+scroll-down = pactl set-sink-volume @DEFAULT_SINK@ -5%
+
+[module/settings]
+type = custom/text
+label = {IC['gear']}
+click-left = grim-settings
+
+[module/battery]
+type = internal/battery
+full-at = 99
+format-charging = <label-charging>
+label-charging = {IC['chg']}
+format-discharging = <ramp-capacity>
+ramp-capacity-0 = {IC['bat0']}
+ramp-capacity-0-foreground = ${{colors.red}}
+ramp-capacity-1 = {IC['bat1']}
+ramp-capacity-2 = {IC['bat2']}
+ramp-capacity-3 = {IC['bat3']}
+ramp-capacity-4 = {IC['bat']}
+label-full = {IC['bat']}
+
+[module/notifications]
+type = custom/script
+exec = dunstctl is-paused 2>/dev/null | grep -q true && echo "{IC['bell_off']}" || echo "{IC['bell']}"
+interval = 2
+click-left = dunstctl set-paused toggle
+
+[module/updates]
+type = custom/script
+exec = grim-updates-count
+interval = 1800
+click-left = grim-term -e update
+
+[module/monitor]
+type = custom/text
+label = {IC['gauge']}
+click-left = grim-term -e top
+
+[module/power]
+type = custom/text
+label = {IC['power']}
+label-foreground = ${{colors.red}}
+click-left = grim-power
+""")
+
+
+def gen_polybar_style(r, wm, style):
+    """Writes GEN/polybar.ini for one of the BAR_STYLES and returns the bar names to start."""
+    if style == "classic":
+        gen_polybar(r, wm)
+        return ["grim"]
+    c = r["colors"]; f = r["font"]; fs = r["font_size"]; m = r["bar_modules"]
+    dots = style in ("reaper-pills", "red-island", "frost-glass", "graphite-icons")
+    icons_only = style in ("graphite-icons", "cachyos-minimal")
+    floating = style in ("reaper-pills", "nord-pills", "red-island", "frost-glass")
+    h = r["bar_height"] + (3 if style == "cachyos-minimal" else 0)
+    bottom = r["bar_position"] == "bottom"
+    L, R = "", ""
+    pill = lambda txt: f"%{{F{c['accent']}}}{L}%{{F{c['accent_fg']} B{c['accent']}}}{txt}%{{B- F{c['accent']}}}{R}%{{F-}}"
+    if dots:
+        act, occ, emp = f"%{{F{c['accent']}}}{IC['dot']}%{{F-}}", IC["dot"], IC["ring"]
+    else:
+        act, occ, emp = pill(" %name% "), " %name% ", " %name% "
+    if wm == "i3":
+        ws = f"""[module/workspaces]
+type = internal/i3
+pin-workspaces = true
+format = <label-state>
+label-focused = "{act}"
+label-unfocused = "{occ if dots else ' %name% '}"
+label-unfocused-foreground = ${{colors.mu}}
+label-visible = "{occ if dots else ' %name% '}"
+label-urgent = "{occ if dots else ' %name% '}"
+label-urgent-foreground = ${{colors.red}}
+label-separator = " "
+"""
+    else:
+        ws = f"""[module/workspaces]
+type = internal/xworkspaces
+label-active = "{act}"
+label-occupied = "{occ}"
+label-occupied-foreground = ${{colors.fg}}
+label-empty = "{emp}"
+label-empty-foreground = ${{colors.mu}}
+label-urgent = "{occ}"
+label-urgent-foreground = ${{colors.red}}
+label-active-padding = 1
+label-occupied-padding = 1
+label-empty-padding = 1
+"""
+    txt = lambda s_: "" if icons_only else s_
+    mods = f"""[module/launcher]
+type = custom/text
+label = {IC['skull']}
+label-foreground = ${{colors.ac}}
+click-left = grim-apps
+
+{ws}
+[module/clock]
+type = internal/date
+interval = 5
+date = {"%H:%M" if r["clock24"] else "%I:%M %p"}
+label = %{{T2}}%date%%{{T-}}
+
+[module/volume]
+type = custom/script
+exec = {"grim-volume --icon" if icons_only else "echo $(grim-volume --icon) $(pactl get-sink-volume @DEFAULT_SINK@ | grep -oE '[0-9]+%' | head -1)"}
+interval = 2
+click-left = pactl set-sink-mute @DEFAULT_SINK@ toggle
+scroll-up = pactl set-sink-volume @DEFAULT_SINK@ +5%
+scroll-down = pactl set-sink-volume @DEFAULT_SINK@ -5%
+
+[module/network]
+type = internal/network
+interface-type = wireless
+label-connected = {IC['wifi']}{txt(' %essid%')}
+label-disconnected = {IC['wifi_off']}
+label-disconnected-foreground = ${{colors.mu}}
+
+[module/battery]
+type = internal/battery
+full-at = 99
+format-charging = <label-charging>
+label-charging = {IC['chg']}{txt(' %percentage%%')}
+format-discharging = <ramp-capacity>{"" if icons_only else " <label-discharging>"}
+label-discharging = %percentage%%
+ramp-capacity-0 = {IC['bat0']}
+ramp-capacity-0-foreground = ${{colors.red}}
+ramp-capacity-1 = {IC['bat1']}
+ramp-capacity-2 = {IC['bat2']}
+ramp-capacity-3 = {IC['bat3']}
+ramp-capacity-4 = {IC['bat']}
+label-full = {IC['bat']}{txt(' 100%')}
+
+[module/cpu]
+type = internal/cpu
+interval = 3
+label = {IC['gauge']}{txt(' %percentage%%')}
+
+[module/memory]
+type = internal/memory
+label = {IC['mem']}{txt(' %percentage_used%%')}
+
+[module/updates]
+type = custom/script
+exec = grim-updates-count
+interval = 1800
+click-left = grim-term -e update
+
+[module/tray]
+type = internal/tray
+tray-spacing = 6
+
+[module/power]
+type = custom/text
+label = {IC['power']}
+label-foreground = ${{colors.red}}
+click-left = grim-power
+"""
+    right = " ".join(x for x in BAR_MODULES if x in m)
+    left = ("launcher " if style in ("reaper-pills", "graphite-icons", "cachyos-minimal") else "") + "workspaces"
+    glass_bg = "#99" + hx(c["bg2"]) if style == "frost-glass" else c["bg2"] if floating else c["bg"]
+
+    def bar(name, width, offset, mleft="", mcenter="", mright="", radius=0, border=0):
+        return f"""[bar/{name}]
+width = {width}
+height = {h}
+offset-x = {offset}
+offset-y = {8 if floating else 0}
+radius = {radius}
+bottom = {"true" if bottom else "false"}
+background = {glass_bg}
+foreground = ${{colors.fg}}
+border-size = {border}
+border-color = {c['accent']}
+font-0 = "{f}:size={fs};3"
+font-1 = "{f}:size={fs + 1}:weight=bold;3"
+padding-left = 2
+padding-right = 2
+module-margin = 1
+modules-left = {mleft}
+modules-center = {mcenter}
+modules-right = {mright}
+fixed-center = true
+cursor-click = pointer
+enable-ipc = true
+wm-restack = {"i3" if wm == "i3" else "generic"}
+
+"""
+    rad = h / 2
+    if style in ("reaper-pills", "nord-pills"):
+        bars = bar("left", "20%", "12", mleft=left, radius=rad) + bar("center", "9%", "45.5%", mcenter="clock", radius=rad) \
+             + bar("right", "26%", "74%:-12", mright=right, radius=rad)
+        names = ["left", "center", "right"]
+    elif style == "red-island":
+        bars = bar("grim", "46%", "27%", mleft=left, mcenter="clock", mright=right, radius=rad)
+        names = ["grim"]
+    elif style == "frost-glass":
+        bars = bar("grim", "100%:-24", "12", mleft=left, mcenter="clock", mright=right, radius=12, border=1)
+        names = ["grim"]
+    else:  # graphite-icons, cachyos-minimal: full strip
+        bars = bar("grim", "100%", "0", mleft=left, mcenter="clock", mright=right)
+        names = ["grim"]
+    write(GEN / "polybar.ini", f"""; Grim OS rice: {r['name']}, bar style {BAR_STYLES[style][0]} (written by grim-rice)
+[colors]
+fg = {c['fg']}
+mu = {c['muted']}
+ac = {c['accent']}
+red = {c['urgent']}
+
+{bars}{mods}""")
+    return names
+
+
+def gen_waybar(r, wm):
+    c = r["colors"]; m = r["bar_modules"]
+    style = bar_style_for(r, wm)
+    ws = {"sway": "sway/workspaces", "hyprland": "hyprland/workspaces", "niri": "niri/workspaces"}[wm]
+    lang = {"sway": "sway/language", "hyprland": "hyprland/language", "niri": "niri/language"}[wm]
+    clockfmt = "%H:%M" if r["clock24"] else "%I:%M %p"
+    dots = style in ("reaper-pills", "red-island", "frost-glass", "graphite-icons")
+    icons_only = style in ("graphite-icons", "cachyos-minimal")
+    floating = style in ("reaper-pills", "nord-pills", "red-island", "frost-glass")
+    t = lambda s_: "" if icons_only else s_
+    ws_conf = {"format": "{icon}", "format-icons": {"focused": IC["dot"], "active": IC["dot"], "urgent": IC["dot"], "default": IC["ring"]}} if dots \
+        else ({"format": "{name}"} if wm != "niri" else {"format": "{index}"})
+    mod_conf = {
+        ws: ws_conf,
+        "custom/launcher": {"format": IC["skull"], "on-click": "grim-apps", "tooltip": False},
+        "custom/volume": {"exec": "grim-volume --icon" if style != "classic" else "grim-volume", "interval": 2,
+                          "format": "{}" if style != "classic" else IC["vol"] + " {}",
+                          "on-click": "pactl set-sink-mute @DEFAULT_SINK@ toggle",
+                          "on-scroll-up": "pactl set-sink-volume @DEFAULT_SINK@ +5%",
+                          "on-scroll-down": "pactl set-sink-volume @DEFAULT_SINK@ -5%"},
+        lang: {"format": "{short}"} if wm != "niri" else {"format": "{}"},
+        "clock": {"format": ("{:%A, %B %d %Y  " + clockfmt + "}") if style == "classic" else "{:" + clockfmt + "}", "interval": 5},
+        "network": {"format-wifi": IC["wifi"] + (" {ipaddr}" if style == "classic" else t(" {essid}")),
+                    "format-ethernet": IC["eth"] + (" {ipaddr}" if style == "classic" else ""),
+                    "format-disconnected": IC["wifi_off"], "tooltip-format": "{essid} {ifname} {ipaddr}"},
+        "disk": {"format": "/ {percentage_used}%", "path": "/"},
+        "temperature": {"format": IC["temp"] + " {temperatureC}°C"},
+        "cpu": {"format": IC["gauge"] + t(" {usage}%"), "interval": 3},
+        "memory": {"format": IC["mem"] + t(" {percentage}%")},
+        "battery": {"format": "{icon}" + t(" {capacity}%"), "format-charging": IC["chg"] + t(" {capacity}%"),
+                    "format-icons": [IC["bat0"], IC["bat1"], IC["bat2"], IC["bat3"], IC["bat"]]},
+        "custom/updates": {"exec": "grim-updates-count", "interval": 1800, "on-click": "grim-term -e update"},
+        "tray": {"spacing": 6},
+        "custom/power": {"format": IC["power"], "on-click": "grim-power", "tooltip": False},
+    }
+    name = {"volume": "custom/volume", "network": "network", "battery": "battery", "cpu": "cpu", "memory": "memory",
+            "updates": "custom/updates", "tray": "tray", "power": "custom/power"}
+    right = [name[x] for x in BAR_MODULES if x in m]
+    if style == "classic":
+        left = [ws] + (["custom/volume"] if "volume" in m else []) + [lang]
+        right = [x for x in (["network"] if "network" in m else []) + ["disk", "temperature"] +
+                 [name[k] for k in ("memory", "battery", "tray", "power") if k in m]]
+    else:
+        left = (["custom/launcher"] if style in ("reaper-pills", "graphite-icons", "cachyos-minimal") else []) + [ws]
+    conf = {"layer": "top", "position": r["bar_position"], "height": r["bar_height"] + (3 if style == "cachyos-minimal" else 0),
+            "spacing": 8, "modules-left": left, "modules-center": ["clock"], "modules-right": right}
+    if style == "red-island":
+        conf.update({"modules-left": [], "modules-center": left + ["clock"] + right, "modules-right": []})
+    if floating:
+        conf.update({"margin-top": 8 if r["bar_position"] == "top" else 0, "margin-bottom": 8 if r["bar_position"] == "bottom" else 0,
+                     "margin-left": 12, "margin-right": 12})
+    conf.update(mod_conf)
+    write(GEN / f"waybar-{wm}.json", json.dumps(conf, indent=2, ensure_ascii=False))
+
+    base = f"""/* Grim OS rice: {r['name']}, bar style {BAR_STYLES[style][0]} */
+* {{ font-family: "{r['font']}"; font-size: {r['font_size'] + 2}px; min-height: 0; border: none; border-radius: 0; }}
+#workspaces button {{ padding: 0 6px; color: {c['muted']}; background: transparent; }}
+#workspaces button.urgent {{ color: {c['urgent']}; }}
+#custom-launcher {{ color: {c['accent']}; padding: 0 6px; }}
+#custom-power {{ color: {c['urgent']}; padding: 0 8px 0 4px; }}
+#clock {{ font-weight: bold; }}
+#tray, #network, #battery, #cpu, #memory, #custom-volume, #custom-updates, #disk, #temperature {{ padding: 0 5px; }}
+#battery.critical {{ color: {c['urgent']}; }}
+"""
+    if dots:
+        active = f"#workspaces button.focused, #workspaces button.active {{ color: {c['accent']}; }}\n"
+    else:
+        active = f"#workspaces button.focused, #workspaces button.active {{ background: {c['accent']}; color: {c['accent_fg']}; border-radius: 999px; }}\n"
+    bg2 = c["bg2"]; r_, g_, b_ = (int(bg2[i:i + 2], 16) for i in (1, 3, 5))
+    css = {
+        "classic": f"""window#waybar {{ background: {bg2}; color: {c['fg']}; }}
+#workspaces button.focused, #workspaces button.active {{ background: {c['accent']}; color: {c['accent_fg']}; }}
+#clock {{ background: {c['accent']}; color: {c['accent_fg']}; padding: 0 14px; }}
+#language {{ color: {c['accent']}; }}
+""",
+        "reaper-pills": f"""window#waybar {{ background: transparent; color: {c['fg']}; }}
+.modules-left, .modules-center, .modules-right {{ background: {bg2}; border-radius: 999px; padding: 0 12px; }}
+""",
+        "red-island": f"""window#waybar {{ background: transparent; color: {c['fg']}; }}
+.modules-center {{ background: {bg2}; border-radius: 999px; padding: 0 16px; }}
+""",
+        "frost-glass": f"""window#waybar {{ background: rgba({r_}, {g_}, {b_}, 0.6); color: {c['fg']}; border: 1px solid {c['accent']}; border-radius: 12px; }}
+""",
+        "graphite-icons": f"""window#waybar {{ background: {c['bg']}; color: {c['fg']}; }}
+""",
+        "cachyos-minimal": f"""window#waybar {{ background: {c['bg']}; color: {c['fg']}; }}
+""",
+    }
+    css["nord-pills"] = css["reaper-pills"]
+    write(GEN / "waybar.css", base + active + css[style])
+
+
+def gen_picom(r):
+    write(GEN / "picom.conf", f"""# Grim OS rice: {r['name']}
+backend = "glx";
+vsync = true;
+corner-radius = {r['radius']};
+rounded-corners-exclude = [ "class_g = 'Polybar'", "window_type = 'dock'", "window_type = 'desktop'" ];
+shadow = {'true' if r.get('dark', True) else 'false'};
+shadow-radius = 14;
+shadow-opacity = 0.35;
+shadow-exclude = [ "class_g = 'Polybar'", "window_type = 'dock'", "_GTK_FRAME_EXTENTS@" ];
+fading = true;
+fade-delta = 6;
+""")
+
+
+# ------------------------------------------------------------------ per desktop
+def gen_i3(r):
+    c = r["colors"]; b = r["border"]
+    p = CFG / "i3/config"; backup_once(p)
+    ws = "\n".join(f"bindsym $mod+{i} workspace number {i}\nbindsym $mod+Shift+{i} move container to workspace number {i}"
+                   for i in range(1, 10))
+    write(p, f"""# Grim OS rice: {r['name']} (written by grim-rice; your old file is i3/config.pre-grim)
+# Super+T float  Super+Q close  Super+Space apps  Super+Return terminal  Print screenshot
+# Super+left-drag move, Super+right-drag resize. Super+F1 Grim Settings.
+set $mod Mod4
+font pango:{r['font']} {r['font_size']}
+floating_modifier $mod
+tiling_drag modifier titlebar
+focus_follows_mouse no
+
+default_border pixel {b}
+default_floating_border pixel {b}
+hide_edge_borders none
+gaps inner {r['gaps']}
+gaps outer 0
+
+#                       border          background      text            indicator       child_border
+client.focused          {c['border_active']} {c['bg']} {c['fg']} {c['accent']} {c['border_active']}
+client.focused_inactive {c['border_inactive']} {c['bg']} {c['muted']} {c['border_inactive']} {c['border_inactive']}
+client.unfocused        {c['border_inactive']} {c['bg']} {c['muted']} {c['border_inactive']} {c['border_inactive']}
+client.urgent           {c['urgent']} {c['bg']} {c['fg']} {c['urgent']} {c['urgent']}
+client.background       {c['bg']}
+
+bindsym $mod+t floating toggle
+bindsym $mod+q kill
+bindsym $mod+space exec --no-startup-id grim-apps
+bindsym $mod+Return exec --no-startup-id grim-term
+bindsym Print exec --no-startup-id grim-shot
+bindsym $mod+F1 exec --no-startup-id grim-settings
+bindsym $mod+Shift+e exec --no-startup-id grim-power
+bindsym $mod+Shift+r restart
+bindsym $mod+f fullscreen toggle
+bindsym $mod+b split h
+bindsym $mod+v split v
+bindsym $mod+s layout stacking
+bindsym $mod+w layout tabbed
+bindsym $mod+e layout toggle split
+bindsym $mod+Shift+space focus mode_toggle
+
+bindsym $mod+Left focus left
+bindsym $mod+Down focus down
+bindsym $mod+Up focus up
+bindsym $mod+Right focus right
+bindsym $mod+Shift+Left move left
+bindsym $mod+Shift+Down move down
+bindsym $mod+Shift+Up move up
+bindsym $mod+Shift+Right move right
+{ws}
+
+mode "resize" {{
+    bindsym Left resize shrink width 10 px or 10 ppt
+    bindsym Right resize grow width 10 px or 10 ppt
+    bindsym Up resize shrink height 10 px or 10 ppt
+    bindsym Down resize grow height 10 px or 10 ppt
+    bindsym Escape mode "default"
+    bindsym Return mode "default"
+}}
+bindsym $mod+r mode "resize"
+
+for_window [window_role="pop-up"] floating enable
+for_window [window_type="dialog"] floating enable
+for_window [class="os.grim.Settings|Pavucontrol"] floating enable
+
+exec_always --no-startup-id grim-rice session i3
+""")
+
+
+def gen_sway(r):
+    c = r["colors"]; b = r["border"]
+    p = CFG / "sway/config"; backup_once(p)
+    ws = "\n".join(f"bindsym $mod+{i} workspace number {i}\nbindsym $mod+Shift+{i} move container to workspace number {i}"
+                   for i in range(1, 10))
+    write(p, f"""# Grim OS rice: {r['name']} (written by grim-rice; your old file is sway/config.pre-grim)
+# Super+T float  Super+Q close  Super+Space apps  Super+Return terminal  Print screenshot
+# Super+left-drag move, Super+right-drag resize. Super+F1 Grim Settings.
+set $mod Mod4
+font pango:{r['font']} {r['font_size']}
+floating_modifier $mod normal
+focus_follows_mouse no
+output * bg {r['wall']} {r['wall_mode']}
+input type:touchpad {{ tap enabled }}
+
+default_border pixel {b}
+default_floating_border pixel {b}
+gaps inner {r['gaps']}
+
+client.focused          {c['border_active']} {c['bg']} {c['fg']} {c['accent']} {c['border_active']}
+client.focused_inactive {c['border_inactive']} {c['bg']} {c['muted']} {c['border_inactive']} {c['border_inactive']}
+client.unfocused        {c['border_inactive']} {c['bg']} {c['muted']} {c['border_inactive']} {c['border_inactive']}
+client.urgent           {c['urgent']} {c['bg']} {c['fg']} {c['urgent']} {c['urgent']}
+
+bindsym $mod+t floating toggle
+bindsym $mod+q kill
+bindsym $mod+space exec grim-apps
+bindsym $mod+Return exec grim-term
+bindsym Print exec grim-shot
+bindsym $mod+F1 exec grim-settings
+bindsym $mod+Shift+e exec grim-power
+bindsym $mod+Shift+r reload
+bindsym $mod+f fullscreen toggle
+bindsym $mod+b splith
+bindsym $mod+v splitv
+bindsym $mod+s layout stacking
+bindsym $mod+w layout tabbed
+bindsym $mod+e layout toggle split
+bindsym $mod+Shift+space focus mode_toggle
+bindsym $mod+Left focus left
+bindsym $mod+Down focus down
+bindsym $mod+Up focus up
+bindsym $mod+Right focus right
+bindsym $mod+Shift+Left move left
+bindsym $mod+Shift+Down move down
+bindsym $mod+Shift+Up move up
+bindsym $mod+Shift+Right move right
+{ws}
+mode "resize" {{
+    bindsym Left resize shrink width 10px
+    bindsym Right resize grow width 10px
+    bindsym Up resize shrink height 10px
+    bindsym Down resize grow height 10px
+    bindsym Escape mode "default"
+}}
+bindsym $mod+r mode "resize"
+
+for_window [app_id="os.grim.Settings"] floating enable
+for_window [window_type="dialog"] floating enable
+
+exec_always grim-rice session sway
+include /etc/sway/config.d/*
+""")
+
+
+def gen_hyprland(r):
+    c = r["colors"]
+    src = Path("/usr/share/hypr/hyprland.lua")
+    if not src.exists():
+        return
+    s = src.read_text()
+    s = s.replace('local terminal    = "kitty"', 'local terminal    = "grim-term"')
+    s = s.replace('local fileManager = "dolphin"', 'local fileManager = "grim-term"')
+    s = s.replace('local menu        = "hyprlauncher"', 'local menu        = "grim-apps"')
+    s = s.replace('hl.bind(mainMod .. " + Q", hl.dsp.exec_cmd(terminal))', 'hl.bind(mainMod .. " + RETURN", hl.dsp.exec_cmd(terminal))')
+    s = s.replace('hl.bind(mainMod .. " + C", hl.dsp.window.close())', 'hl.bind(mainMod .. " + Q", hl.dsp.window.close())')
+    s = s.replace('hl.bind(mainMod .. " + V", hl.dsp.window.float({ action = "toggle" }))', 'hl.bind(mainMod .. " + T", hl.dsp.window.float({ action = "toggle" }))')
+    s = s.replace('hl.bind(mainMod .. " + R", hl.dsp.exec_cmd(menu))', 'hl.bind(mainMod .. " + SPACE", hl.dsp.exec_cmd(menu))\n'
+                  'hl.bind("Print", hl.dsp.exec_cmd("grim-shot"))\n'
+                  'hl.bind(mainMod .. " + F1", hl.dsp.exec_cmd("grim-settings"))\n'
+                  'hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("grim-power"))')
+    s = re.sub(r'active_border\s*=\s*\{[^}]*\}[^,\n]*,', f'active_border   = "{rgba(c["border_active"])}",', s, count=1)
+    s = re.sub(r'inactive_border\s*=\s*"[^"]*"', f'inactive_border = "{rgba(c["border_inactive"])}"', s, count=1)
+    s = re.sub(r'gaps_in\s*=\s*\d+', f'gaps_in  = {max(r["gaps"] // 2, 2)}', s, count=1)
+    s = re.sub(r'gaps_out\s*=\s*\d+', f'gaps_out = {r["gaps"]}', s, count=1)
+    s = re.sub(r'border_size\s*=\s*\d+', f'border_size = {r["border"]}', s, count=1)
+    s = re.sub(r'rounding\s*=\s*\d+', f'rounding       = {r["radius"]}', s, count=1)
+    m = re.search(r'XkbLayout"\s+"([^"]+)"', Path("/etc/X11/xorg.conf.d/00-keyboard.conf").read_text()) \
+        if Path("/etc/X11/xorg.conf.d/00-keyboard.conf").exists() else None
+    if m:
+        s = re.sub(r'kb_layout\s*=\s*"us"', f'kb_layout  = "{m.group(1)}"', s, count=1)
+    s += '\n-- Grim OS: bar, wallpaper, dock and notifications\nhl.on("hyprland.start", function ()\n  hl.exec_cmd("grim-rice session hyprland")\nend)\n'
+    s = f"-- Grim OS rice: {r['name']} (written by grim-rice from Hyprland's example config)\n" + s
+    p = CFG / "hypr/hyprland.lua"; backup_once(p); write(p, s)
+
+
+def gen_niri(r):
+    c = r["colors"]
+    src = Path("/usr/share/doc/niri/default-config.kdl")
+    if not src.exists():
+        return
+    s = src.read_text()
+    s = re.sub(r'Mod\+T hotkey-overlay-title="[^"]*" \{ spawn "alacritty"; \}',
+               'Mod+Return hotkey-overlay-title="Open a Terminal" { spawn "grim-term"; }\n'
+               '    Mod+T hotkey-overlay-title="Toggle floating" { toggle-window-floating; }\n'
+               '    Mod+Space hotkey-overlay-title="Find an app" { spawn "grim-apps"; }\n'
+               '    Mod+F1 hotkey-overlay-title="Grim Settings" { spawn "grim-settings"; }', s)
+    s = re.sub(r'Mod\+D hotkey-overlay-title="[^"]*" \{ spawn "fuzzel"; \}', 'Mod+D { spawn "grim-apps"; }', s)
+    s = s.replace('spawn-at-startup "waybar"', 'spawn-at-startup "grim-rice" "session" "niri"')
+    s = s.replace('active-color "#7fc8ff"', f'active-color "{c["border_active"]}"')
+    s = s.replace('inactive-color "#505050"', f'inactive-color "{c["border_inactive"]}"')
+    s = re.sub(r'(\n    gaps )\d+', rf'\g<1>{r["gaps"]}', s, count=1)
+    s += f"""
+// Grim OS: rounded corners from the rice
+window-rule {{
+    geometry-corner-radius {r['radius']}
+    clip-to-geometry true
+}}
+window-rule {{
+    match app-id="os.grim.Settings"
+    open-floating true
+}}
+"""
+    s = f"// Grim OS rice: {r['name']} (written by grim-rice from niri's default config)\n" + s
+    p = CFG / "niri/config.kdl"; backup_once(p); write(p, s)
+
+
+def gen_openbox(r):
+    import xml.etree.ElementTree as ET
+    c = r["colors"]
+    src = Path("/etc/xdg/openbox/rc.xml")
+    if not src.exists():
+        return
+    ns = "http://openbox.org/3.4/rc"
+    ET.register_namespace("", ns)
+    tree = ET.parse(src); root = tree.getroot()
+    q = lambda t: f"{{{ns}}}{t}"
+
+    def keybind(key, action, cmd=None):
+        kb = ET.SubElement(kbd, q("keybind"), key=key)
+        a = ET.SubElement(kb, q("action"), name=action)
+        if cmd:
+            ET.SubElement(a, q("command")).text = cmd
+
+    kbd = root.find(q("keyboard"))
+    for kb in list(kbd.findall(q("keybind"))):
+        if kb.get("key") in ("W-t", "W-q", "W-space", "W-Return", "Print", "W-F1", "W-S-e"):
+            kbd.remove(kb)
+    keybind("W-t", "ToggleMaximize")
+    keybind("W-q", "Close")
+    keybind("W-space", "Execute", "grim-apps")
+    keybind("W-Return", "Execute", "grim-term")
+    keybind("Print", "Execute", "grim-shot")
+    keybind("W-F1", "Execute", "grim-settings")
+    keybind("W-S-e", "Execute", "grim-power")
+    mouse = root.find(q("mouse"))
+    for ctx in mouse.findall(q("context")):
+        if ctx.get("name") == "Frame":
+            for btn, act in (("W-Left", "Move"), ("W-Right", "Resize")):
+                mb = ET.SubElement(ctx, q("mousebind"), button=btn, action="Drag")
+                ET.SubElement(mb, q("action"), name=act)
+            mb = ET.SubElement(ctx, q("mousebind"), button="W-Left", action="Press")
+            ET.SubElement(mb, q("action"), name="Focus"); ET.SubElement(mb, q("action"), name="Raise")
+    theme = root.find(q("theme"))
+    theme.find(q("name")).text = "Grim"
+    margins = root.find(q("margins"))
+    if margins is not None:
+        margins.find(q("top" if r["bar_position"] == "top" else "bottom")).text = "26"
+    p = CFG / "openbox/rc.xml"; backup_once(p)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tree.write(p, xml_declaration=True, encoding="UTF-8")
+    write(CFG / "openbox/autostart", "# Grim OS\ngrim-rice session openbox &\n")
+    write(CFG / "openbox/menu.xml", """<?xml version="1.0" encoding="UTF-8"?>
+<!-- Grim OS -->
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+<menu id="root-menu" label="Grim OS">
+  <item label="Terminal"><action name="Execute"><command>grim-term</command></action></item>
+  <item label="Find an app"><action name="Execute"><command>grim-apps</command></action></item>
+  <item label="Grim Settings"><action name="Execute"><command>grim-settings</command></action></item>
+  <item label="Help"><action name="Execute"><command>grim-term -e grimhelp</command></action></item>
+  <separator/>
+  <item label="Reconfigure"><action name="Reconfigure"/></item>
+  <item label="Power"><action name="Execute"><command>grim-power</command></action></item>
+</menu>
+</openbox_menu>
+""")
+    write(HOME / ".themes/Grim/openbox-3/themerc", f"""# Grim OS rice: {r['name']}
+border.width: {r['border']}
+padding.width: 6
+padding.height: 4
+window.handle.width: 0
+window.client.padding.width: 0
+window.active.border.color: {c['border_active']}
+window.inactive.border.color: {c['border_inactive']}
+window.active.title.bg: flat solid
+window.active.title.bg.color: {c['bg3']}
+window.active.label.bg: parentrelative
+window.active.label.text.color: {c['fg']}
+window.active.label.text.font: {r['font']}:size={r['font_size']}:weight=bold
+window.inactive.title.bg: flat solid
+window.inactive.title.bg.color: {c['bg2']}
+window.inactive.label.bg: parentrelative
+window.inactive.label.text.color: {c['muted']}
+window.active.button.unpressed.bg: parentrelative
+window.active.button.unpressed.image.color: {c['fg']}
+window.active.button.hover.bg: flat solid
+window.active.button.hover.bg.color: {c['accent']}
+window.active.button.hover.image.color: {c['accent_fg']}
+window.active.button.pressed.bg: flat solid
+window.active.button.pressed.bg.color: {c['accent']}
+window.active.button.pressed.image.color: {c['accent_fg']}
+window.inactive.button.unpressed.bg: parentrelative
+window.inactive.button.unpressed.image.color: {c['muted']}
+menu.border.width: {r['border']}
+menu.border.color: {c['accent']}
+menu.title.bg: flat solid
+menu.title.bg.color: {c['bg3']}
+menu.title.text.color: {c['fg']}
+menu.items.bg: flat solid
+menu.items.bg.color: {c['bg2']}
+menu.items.text.color: {c['fg']}
+menu.items.disabled.text.color: {c['muted']}
+menu.items.active.bg: flat solid
+menu.items.active.bg.color: {c['accent']}
+menu.items.active.text.color: {c['accent_fg']}
+menu.separator.color: {c['border_inactive']}
+osd.bg: flat solid
+osd.bg.color: {c['bg2']}
+osd.border.color: {c['accent']}
+osd.label.text.color: {c['fg']}
+osd.hilight.bg: flat solid
+osd.hilight.bg.color: {c['accent']}
+osd.unhilight.bg: flat solid
+osd.unhilight.bg.color: {c['bg3']}
+""")
+
+
+def gen_icewm(r):
+    c = r["colors"]; d = HOME / ".icewm"
+    for f in ("preferences", "keys", "prefoverride"):
+        backup_once(d / f)
+    write(d / "preferences", f"""# Grim OS rice: {r['name']} (written by grim-rice)
+# Super+T maximize/restore (IceWM windows always float), Super+Q close
+MouseWinMove="Super+Pointer_Button1"
+MouseWinSize="Super+Pointer_Button3"
+KeyWinClose="Super+q"
+KeyWinMaximize="Super+t"
+Win95Keys=0
+ShowTaskBar=0
+TaskBarAtTop={1 if r['bar_position'] == 'top' else 0}
+ClickToFocus=1
+DesktopBackgroundImage="{r['wall']}"
+DesktopBackgroundScaled={1 if r['wall_mode'] in ('fill', 'fit') else 0}
+DesktopBackgroundCenter={1 if r['wall_mode'] == 'center' else 0}
+""")
+    write(d / "keys", """# Grim OS
+key "Super+space" grim-apps
+key "Super+Return" grim-term
+key "Print" grim-shot
+key "Super+F1" grim-settings
+key "Super+Shift+e" grim-power
+""")
+    write(d / "prefoverride", f"""# Grim OS rice: {r['name']} colours (override the theme)
+Theme="default/default.theme"
+TitleFontNameXft="{r['font']}:size={r['font_size']}:bold"
+NormalFontNameXft="{r['font']}:size={r['font_size']}"
+ColorActiveTitleBar="{c['bg3']}"
+ColorNormalTitleBar="{c['bg2']}"
+ColorActiveTitleBarText="{c['fg']}"
+ColorNormalTitleBarText="{c['muted']}"
+ColorActiveBorder="{c['border_active']}"
+ColorNormalBorder="{c['border_inactive']}"
+ColorDefaultTaskBar="{c['bg2']}"
+ColorDefaultTaskBarText="{c['fg']}"
+ColorActiveTaskBarApp="{c['accent']}"
+ColorActiveTaskBarAppText="{c['accent_fg']}"
+ColorNormalTaskBarApp="{c['bg3']}"
+ColorNormalTaskBarAppText="{c['fg']}"
+ColorActiveWorkspaceButton="{c['accent']}"
+ColorActiveWorkspaceButtonText="{c['accent_fg']}"
+ColorNormalWorkspaceButton="{c['bg3']}"
+ColorNormalWorkspaceButtonText="{c['fg']}"
+ColorActiveMenuItem="{c['accent']}"
+ColorActiveMenuItemText="{c['accent_fg']}"
+ColorNormalMenu="{c['bg2']}"
+ColorNormalMenuItemText="{c['fg']}"
+""")
+    write(d / "startup", "#!/bin/sh\n# Grim OS\ngrim-rice session icewm &\n", 0o755)
+
+
+def gen_kde(r):
+    kw = shutil.which("kwriteconfig6")
+    if not kw:
+        return
+    def k(f, g, key, val):
+        groups = []
+        for part in g.split("]["):
+            groups += ["--group", part]
+        run(kw, "--file", str(CFG / f), *groups, "--key", key, val)
+    k("kglobalshortcutsrc", "kwin", "Window Close", "Meta+Q\tAlt+F4,Alt+F4,Close Window")
+    k("kglobalshortcutsrc", "kwin", "Window Maximize", "Meta+T\tMeta+PgUp,Meta+PgUp,Maximize Window")
+    k("kglobalshortcutsrc", "services][org.kde.krunner.desktop", "_launch", "Meta+Space\tAlt+Space\tAlt+F2")
+    k("kglobalshortcutsrc", "services][org.kde.spectacle.desktop", "RectangularRegionScreenShot", "Print\tMeta+Shift+Print")
+    k("kglobalshortcutsrc", "services][org.kde.spectacle.desktop", "_launch", "none")
+    k("kwinrc", "MouseBindings", "CommandAllKey", "Meta")
+    k("kwinrc", "MouseBindings", "CommandAll1", "Move")
+    k("kwinrc", "MouseBindings", "CommandAll3", "Resize")
+    autostart("kde", r)
+
+
+def gen_cosmic(r):
+    # COSMIC reads RON files. Untested on real COSMIC builds: if a shortcut is ignored, set it in COSMIC Settings.
+    d = CFG / "cosmic/com.system76.CosmicSettings.Shortcuts/v1"
+    write(d / "custom", """{
+    (modifiers: [Super], key: "t"): ToggleWindowFloating,
+    (modifiers: [Super], key: "q"): Close,
+    (modifiers: [Super], key: "space"): System(Launcher),
+    (modifiers: [Super], key: "Return"): Spawn("grim-term"),
+    (modifiers: [Super], key: "F1"): Spawn("grim-settings"),
+}
+""")
+    write(CFG / "cosmic/com.system76.CosmicTheme.Mode/v1/is_dark", "true" if r.get("dark", True) else "false")
+    write(CFG / "cosmic/com.system76.CosmicBackground/v1/all", f"""(
+    output: "all",
+    source: Path("{r['wall']}"),
+    filter_by_theme: false,
+    rotation_frequency: 300,
+    filter_method: Lanczos,
+    scaling_mode: Zoom,
+    sampling_method: Alphanumeric,
+)
+""")
+
+
+def autostart(desk, r):
+    write(CFG / f"autostart/grim-{desk}.desktop", f"""[Desktop Entry]
+Type=Application
+Name=Grim OS rice
+Comment=Applies the Grim OS rice (wallpaper, keys, dock)
+Exec=grim-rice session {desk}
+OnlyShowIn={ {'xfce': 'XFCE', 'gnome': 'GNOME', 'kde': 'KDE'}[desk] };
+X-GNOME-Autostart-enabled=true
+""")
+
+
+GENERATORS = {"i3": gen_i3, "sway": gen_sway, "hyprland": gen_hyprland, "niri": gen_niri,
+              "openbox": gen_openbox, "icewm": gen_icewm, "kde": gen_kde, "cosmic": gen_cosmic,
+              "xfce": lambda r: autostart("xfce", r), "gnome": lambda r: autostart("gnome", r)}
+
+
+# ------------------------------------------------------------------ dock
+def start_plank(r):
+    run("pkill", "-x", "plank")
+    if not r["dock"]:
+        return
+    path = "net.launchpad.plank.dock.settings:/net/launchpad/plank/docks/dock1/"
+    run("gsettings", "set", path, "position", r["dock_position"])
+    run("gsettings", "set", path, "icon-size", str(r["dock_size"]))
+    run("gsettings", "set", path, "hide-mode", "intelligent" if r["dock_autohide"] else "none")
+    run("gsettings", "set", path, "theme", "Transparent")
+    spawn("plank")
+
+
+# ------------------------------------------------------------------ displays
+def _out(*cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return ""
+
+
+def displays_list():
+    """Connected screens: [{name, modes: ["1920x1080@60.00"], mode, scale, can_scale}]. Empty = not managed here."""
+    desk = running()
+    out = []
+    if desk == "sway":
+        for o in json.loads(_out("swaymsg", "-t", "get_outputs", "-r") or "[]"):
+            modes = sorted({f"{x['width']}x{x['height']}@{x['refresh'] / 1000:.2f}" for x in o.get("modes", [])},
+                           key=lambda s_: [-float(v) for v in re.split("[x@]", s_)])
+            cm = o.get("current_mode") or {}
+            out.append({"name": o["name"], "modes": modes, "mode": f"{cm.get('width')}x{cm.get('height')}@{cm.get('refresh', 0) / 1000:.2f}",
+                        "scale": o.get("scale", 1.0), "can_scale": True})
+    elif desk == "hyprland":
+        for o in json.loads(_out("hyprctl", "monitors", "-j") or "[]"):
+            modes = [x.replace("Hz", "") for x in o.get("availableModes", [])]
+            out.append({"name": o["name"], "modes": modes, "mode": f"{o['width']}x{o['height']}@{o['refreshRate']:.2f}",
+                        "scale": o.get("scale", 1.0), "can_scale": True})
+    elif desk == "niri":
+        data = json.loads(_out("niri", "msg", "-j", "outputs") or "{}")
+        for name, o in data.items():
+            modes = [f"{x['width']}x{x['height']}@{x['refresh_rate'] / 1000:.2f}" for x in o.get("modes", [])]
+            cur = o.get("current_mode")
+            out.append({"name": name, "modes": modes, "mode": modes[cur] if cur is not None and cur < len(modes) else "",
+                        "scale": (o.get("logical") or {}).get("scale", 1.0), "can_scale": True})
+    elif desk in ("i3", "openbox", "icewm"):
+        cur = None
+        for line in _out("xrandr", "--query").splitlines():
+            mm = re.match(r"^(\S+) connected", line)
+            if mm:
+                cur = {"name": mm.group(1), "modes": [], "mode": "", "scale": 1.0, "can_scale": False}; out.append(cur); continue
+            if re.match(r"^\S", line):
+                cur = None; continue
+            mm = re.match(r"^\s+(\d+x\d+)\s+(.*)$", line)
+            if cur and mm:
+                for rate in re.findall(r"([\d.]+)([*+ ]*)", mm.group(2)):
+                    cur["modes"].append(f"{mm.group(1)}@{float(rate[0]):.2f}")
+                    if "*" in rate[1]:
+                        cur["mode"] = f"{mm.group(1)}@{float(rate[0]):.2f}"
+    return out
+
+
+def display_set(name, mode, scale=1.0):
+    res, _, hz = mode.partition("@")
+    desk = running()
+    if desk == "sway":
+        return run("swaymsg", "output", name, "mode", f"{res}@{hz}Hz", "scale", str(scale))
+    if desk == "hyprland":
+        return run("hyprctl", "keyword", "monitor", f"{name},{res}@{hz},auto,{scale}")
+    if desk == "niri":
+        a = run("niri", "msg", "output", name, "mode", f"{res}@{hz}")
+        return a or run("niri", "msg", "output", name, "scale", str(scale))
+    if desk in ("i3", "openbox", "icewm"):
+        return run("xrandr", "--output", name, "--mode", res, "--rate", hz)
+    return 1
+
+
+def displays_restore(desk):
+    for name, d in (state().get("displays") or {}).items():
+        if d.get("mode"):
+            display_set(name, d["mode"], d.get("scale", 1.0))
+
+
+# ------------------------------------------------------------------ session (runs at login)
+def restart(name, *cmd):
+    run("pkill", "-x", name)
+    spawn(*cmd)
+
+
+def session(desk):
+    st = state()
+    r = load_rice(st.get("rice", "grim"))
+    c = r["colors"]
+    displays_restore(desk)
+    if desk in ("i3", "openbox", "icewm"):
+        if desk != "icewm":
+            run("feh", "--no-fehbg", {"fill": "--bg-fill", "fit": "--bg-max", "center": "--bg-center", "tile": "--bg-tile"}[r["wall_mode"]], r["wall"])
+        names = gen_polybar_style(r, desk, bar_style_for(r, desk))
+        run("pkill", "-x", "polybar")
+        for n in names:
+            spawn("polybar", "-c", str(GEN / "polybar.ini"), n)
+        restart("picom", "picom", "--config", str(GEN / "picom.conf"))
+        restart("dunst", "dunst")
+        if not run("pgrep", "-x", "nm-applet") == 0:
+            spawn("nm-applet")
+        start_plank(r)
+    elif desk in ("sway", "hyprland", "niri"):
+        gen_waybar(r, desk)
+        restart("waybar", "waybar", "-c", str(GEN / f"waybar-{desk}.json"), "-s", str(GEN / "waybar.css"))
+        if desk != "sway":
+            restart("swaybg", "swaybg", "-i", r["wall"], "-m", r["wall_mode"])
+        restart("mako", "mako")
+        for d in ("nwg-dock", "nwg-dock-hyprland"):
+            run("pkill", "-x", d)
+        if r["dock"]:
+            args = ["-p", r["dock_position"], "-i", str(r["dock_size"]), "-mb", "6"] + (["-d"] if r["dock_autohide"] else [])
+            spawn("nwg-dock-hyprland" if desk == "hyprland" else "nwg-dock", *args)
+    elif desk == "xfce":
+        xq = lambda ch, prop, typ, val: run("xfconf-query", "-c", ch, "-p", prop, "-n", "-t", typ, "-s", val)
+        xq("xfwm4", "/general/easy_click", "string", "Super")
+        xq("xfwm4", "/general/title_font", "string", f"{r['font']} Bold {r['font_size']}")
+        xq("xsettings", "/Net/ThemeName", "string", r["gtk_theme"])
+        xq("xsettings", "/Net/IconThemeName", "string", r["icon_theme"])
+        sc = "xfce4-keyboard-shortcuts"
+        xq(sc, "/xfwm4/custom/<Super>q", "string", "close_window_key")
+        xq(sc, "/xfwm4/custom/<Super>t", "string", "maximize_window_key")
+        xq(sc, "/commands/custom/<Super>space", "string", "grim-apps")
+        xq(sc, "/commands/custom/<Super>Return", "string", "grim-term")
+        xq(sc, "/commands/custom/Print", "string", "grim-shot")
+        xq(sc, "/commands/custom/<Super>F1", "string", "grim-settings")
+        try:
+            props = subprocess.run(["xfconf-query", "-c", "xfce4-desktop", "-l"], capture_output=True, text=True).stdout.split()
+        except Exception:
+            props = []
+        imgs = [p for p in props if p.endswith("/last-image")]
+        if not imgs:
+            try:
+                mons = re.findall(r"^(\S+) connected", subprocess.run(["xrandr"], capture_output=True, text=True).stdout, re.M)
+            except Exception:
+                mons = []
+            imgs = [f"/backdrop/screen0/monitor{m}/workspace0/last-image" for m in mons] or ["/backdrop/screen0/monitor0/workspace0/last-image"]
+        for p in imgs:
+            xq("xfce4-desktop", p, "string", r["wall"])
+            xq("xfce4-desktop", p.replace("last-image", "image-style"), "int", {"fill": "5", "fit": "4", "center": "1", "tile": "2"}[r["wall_mode"]])
+        bg = [int(c["bg2"][i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        run("xfconf-query", "-c", "xfce4-panel", "-p", "/panels/panel-1/background-style", "-n", "-t", "uint", "-s", "1")
+        run("xfconf-query", "-c", "xfce4-panel", "-p", "/panels/panel-1/background-rgba", "-n",
+            "-t", "double", "-s", f"{bg[0]:.3f}", "-t", "double", "-s", f"{bg[1]:.3f}",
+            "-t", "double", "-s", f"{bg[2]:.3f}", "-t", "double", "-s", "1.0")
+        start_plank(r)
+    elif desk == "gnome":
+        g = lambda schema, key, val: run("gsettings", "set", schema, key, val)
+        g("org.gnome.desktop.wm.keybindings", "close", "['<Super>q']")
+        g("org.gnome.desktop.wm.keybindings", "toggle-maximized", "['<Super>t']")
+        g("org.gnome.desktop.wm.keybindings", "switch-input-source", "[]")
+        g("org.gnome.desktop.wm.keybindings", "switch-input-source-backward", "[]")
+        g("org.gnome.shell.keybindings", "toggle-application-view", "['<Super>space']")
+        g("org.gnome.desktop.wm.preferences", "mouse-button-modifier", "'<Super>'")
+        g("org.gnome.desktop.wm.preferences", "resize-with-right-button", "true")
+        g("org.gnome.desktop.interface", "color-scheme", "'prefer-dark'" if r.get("dark", True) else "'default'")
+        g("org.gnome.desktop.interface", "accent-color", f"'{r['gnome_accent']}'")
+        g("org.gnome.desktop.interface", "icon-theme", f"'{r['icon_theme']}'")
+        g("org.gnome.desktop.interface", "monospace-font-name", f"'{r['font']} {r['font_size']}'")
+        g("org.gnome.desktop.background", "picture-uri", f"'file://{r['wall']}'")
+        g("org.gnome.desktop.background", "picture-uri-dark", f"'file://{r['wall']}'")
+        g("org.gnome.desktop.background", "picture-options", "'%s'" % {"fill": "zoom", "fit": "scaled", "center": "centered", "tile": "wallpaper"}[r["wall_mode"]])
+        ext = "dash-to-panel@jderose9.github.com"
+        run("gnome-extensions", "enable" if r["dock"] else "disable", ext)
+    elif desk == "kde":
+        run("plasma-apply-colorscheme", r["kde_scheme"])
+        run("plasma-apply-wallpaperimage", r["wall"])
+        run("qdbus6", "org.kde.KWin", "/KWin", "reconfigure")
+
+
+def reload(desk):
+    if desk == "i3":
+        run("i3-msg", "restart")
+    elif desk == "sway":
+        run("swaymsg", "reload")
+    elif desk == "hyprland":
+        run("hyprctl", "reload")
+        session("hyprland")
+    elif desk == "niri":
+        session("niri")          # niri reloads its config file by itself
+    elif desk == "openbox":
+        run("openbox", "--reconfigure"); session("openbox")
+    elif desk == "icewm":
+        run("icesh", "restart"); session("icewm")
+    elif desk in ("xfce", "gnome", "kde"):
+        session(desk)
+
+
+# ------------------------------------------------------------------ commands
+def cmd_apply(rid, desks, do_reload=True):
+    r = load_rice(rid)
+    save_state(rice=rid)
+    gen_common(r)
+    gen_picom(r)
+    for d in desks:
+        GENERATORS[d](r)
+        if d in ("i3", "openbox", "icewm"):
+            gen_polybar_style(r, d, bar_style_for(r, d))
+        if d in ("sway", "hyprland", "niri"):
+            gen_waybar(r, d)
+    cur = running()
+    if do_reload and cur in desks:
+        reload(cur)
+    print(f"Applied '{r['name']}' to: {', '.join(DESKTOPS[d][1] for d in desks) or 'nothing'}")
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__); return
+    cmd, args = argv[0], argv[1:]
+    if cmd == "list":
+        cur = state().get("rice", "grim")
+        for r in all_rices():
+            print(f"{'*' if r['id'] == cur else ' '} {r['id']:<12} {r['name']:<12} {r['description']}")
+    elif cmd == "current":
+        print(state().get("rice", "grim"))
+    elif cmd == "desktops":
+        cur = running()
+        for d in installed():
+            print(f"{'*' if d == cur else ' '} {d:<9} {DESKTOPS[d][1]}")
+    elif cmd == "apply":
+        if not args:
+            sys.exit("usage: grim-rice apply <id> [--desktop D | --all] [--no-reload]")
+        rid = args[0]
+        if "--desktop" in args:
+            desks = [args[args.index("--desktop") + 1]]
+        elif "--all" in args:
+            desks = installed()
+        else:
+            desks = [running()] if running() else installed()
+        cmd_apply(rid, [d for d in desks if d], "--no-reload" not in args)
+    elif cmd == "dock" and args and args[0] in ("on", "off"):
+        save_state(dock=args[0] == "on")
+        cmd_apply(state().get("rice", "grim"), [d for d in [running()] if d] or installed())
+    elif cmd == "bar" and args and args[0] in ("top", "bottom"):
+        save_state(bar_position=args[0])
+        cmd_apply(state().get("rice", "grim"), [d for d in [running()] if d] or installed())
+    elif cmd == "session" and args:
+        session(args[0])
+    elif cmd == "set" and len(args) >= 2 and args[0] in SETTABLE:
+        try:
+            val = json.loads(args[1])
+        except json.JSONDecodeError:
+            val = args[1]
+        save_state(**{args[0]: val})
+        if "--no-apply" not in args:
+            cmd_apply(state().get("rice", "grim"), [d for d in [running()] if d] or installed())
+    elif cmd == "unset" and args and args[0] in SETTABLE:
+        st = state(); st.pop(args[0], None)
+        STATE.parent.mkdir(parents=True, exist_ok=True); STATE.write_text(json.dumps(st, indent=2))
+        cmd_apply(st.get("rice", "grim"), [d for d in [running()] if d] or installed())
+    elif cmd == "info":
+        r = load_rice(state().get("rice", "grim"))
+        r.update({"desktop": running(), "installed": installed(), "bar_styles": BAR_STYLES, "bar_modules_all": BAR_MODULES,
+                  "bar_style_effective": bar_style_for(r, running() or "i3"), "state": state()})
+        print(json.dumps(r, indent=2, ensure_ascii=False))
+    elif cmd == "rices":
+        print(json.dumps(all_rices(), ensure_ascii=False))
+    elif cmd == "wallpapers":
+        pics = []
+        for d in (WALLS, HOME / "Pictures/Wallpapers", HOME / "Pictures"):
+            if d.is_dir():
+                pics += [str(p) for p in sorted(d.iterdir()) if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")]
+        print(json.dumps(list(dict.fromkeys(pics))))
+    elif cmd == "save-rice" and args:
+        r = load_rice(state().get("rice", "grim"))
+        rid = re.sub(r"[^a-z0-9]+", "-", args[0].lower()).strip("-") or "my-rice"
+        keep = {k: r[k] for k in ("dark", "colors", "font", "font_size", "gaps", "border", "radius", "dock", "bar_position",
+                                  "gtk_theme", "icon_theme", "gnome_accent", "kde_scheme") if k in r}
+        keep.update({"name": args[0], "description": f"Saved from {r['name']} in Grim Settings.", "order": 50,
+                     "wallpaper": r["wall"], "bar_style": r["bar_style"]})
+        write(USER_RICES / f"{rid}.json", json.dumps(keep, indent=2))
+        st = state(); [st.pop(k, None) for k in ("colors", "wallpaper")]; st["rice"] = rid
+        STATE.write_text(json.dumps(st, indent=2))
+        print(rid)
+    elif cmd == "display" and args:
+        if args[0] == "list":
+            print(json.dumps(displays_list()))
+        elif args[0] == "set" and len(args) >= 3:
+            sys.exit(display_set(args[1], args[2], float(args[3]) if len(args) > 3 else 1.0))
+        elif args[0] == "save" and len(args) >= 3:
+            d = state().get("displays") or {}
+            d[args[1]] = {"mode": args[2], "scale": float(args[3]) if len(args) > 3 else 1.0}
+            save_state(displays=d)
+    else:
+        print(__doc__); sys.exit(1)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

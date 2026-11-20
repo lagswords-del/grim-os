@@ -1,0 +1,22 @@
+TROUBLESHOOTING
+
+Black screen after login
+  Press Ctrl+Alt+F2, log in, and run  journalctl -b -p err
+  NVIDIA cards: try installing nvidia-open (RTX/GTX 16 and newer).
+
+Wrong password at the login screen
+  The text login remembers the last username, so check the
+  Username line before typing your password. Grim OS does not lock
+  your account after wrong tries.
+
+No sound
+  systemctl --user restart pipewire wireplumber
+
+Update failed with "signature" or "keyring" errors
+  sudo pacman -Sy archlinux-keyring && update
+
+Out of disk space
+  sudo pacman -Sc      clears old downloaded packages
+
+Install log
+  The installer's log is saved at /var/log/griminstall.log

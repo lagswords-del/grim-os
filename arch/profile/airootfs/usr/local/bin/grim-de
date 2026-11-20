@@ -1,0 +1,667 @@
+#!/usr/bin/env python3
+"""grim-de: the Grim desktop (niri + Grim Shell). Turns ~/.config/grim-de/settings.json into
+niri, shell, terminal, notification, lock and idle config, and starts the session pieces.
+
+  grim-de apply                 rewrite every generated file and reload what's running
+  grim-de get [KEY]             print the settings (or one key) as JSON
+  grim-de set KEY JSON          change one setting (dots for nested: glass.blur_passes) and apply
+  grim-de reset KEY             back to the default for KEY
+  grim-de themes                list themes (JSON)
+  grim-de palette               the colours in use right now (JSON)
+  grim-de wallpapers            list pictures (JSON)
+  grim-de windows               app ids of open windows (JSON), for per-app transparency
+  grim-de outputs               screens and their modes (JSON)
+  grim-de output NAME MODE SCALE    try a display mode now (not saved)
+  grim-de game on|off|toggle    game mode: no blur, no transparency, no animations
+  grim-de term                  open the Grim terminal (Alacritty with Grim DE's config)
+  grim-de launcher              the app finder
+  grim-de lock                  lock the screen
+  grim-de session-start         started by niri at login: wallpaper, shell, notifications, idle
+"""
+import copy, json, os, re, shutil, subprocess, sys
+from pathlib import Path
+
+SHARE = Path(os.environ.get("GRIM_DE_SHARE", "/usr/share/grim-de"))
+GRIM_SHARE = Path(os.environ.get("GRIM_SHARE", "/usr/share/grimos"))
+HOME = Path.home()
+CFG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "grim-de"
+SETTINGS = CFG / "settings.json"
+NIRI = CFG / "niri"
+
+DEFAULTS = {
+    "theme": "nord-snow",
+    "accent": None,
+    "wallpaper": str(GRIM_SHARE / "wallpapers" / "nord-snow.jpg"),
+    "wallpaper_mode": "fill",
+    "gaps": 12,
+    "outline": {"width": 2, "active": None, "active2": None, "inactive": None, "radius": 10,
+                "style": "normal"},   # "win7": thick light-blue glass frames, rounded top corners
+    "glass": {"enabled": True, "blur_passes": 3, "blur_offset": 3.0, "noise": 0.02, "saturation": 1.2,
+              "inactive_opacity": 0.94, "panel_opacity": 0.72, "shadows": True},
+    "apps": [{"app_id": "Alacritty", "name": "Terminal", "opacity": 1.0, "inactive": 1.0},
+             {"app_id": "thunar", "name": "Files", "opacity": 0.9, "inactive": 0.84}],
+    "bar": {"enabled": True, "layout": "strip", "position": "top", "height": 32, "clock24": True,
+            "modules": ["workspaces", "title", "date", "clock", "tray", "updates", "volume", "network", "battery", "notifications", "control", "power"]},
+    # workspace markers in the bar and dock: "dots" or "numbers"
+    "workspace_style": "dots",
+    # dock items, in order. Types: launcher apps workspaces title clock date separator gap custom
+    # (custom: name, icon, command). "pill": true gives an item its own pill.
+    "dock": {"enabled": True, "layout": "pill", "position": "bottom", "size": 44, "autohide": False,
+             "items": [{"type": "apps"}],
+             "pinned": ["firefox", "Alacritty", "thunar", "os.grim.Settings"]},
+    "displays": {},
+    "keybinds": {
+        "terminal": "Mod+Return", "launcher": "Mod+Space", "close": "Mod+Q", "float": "Mod+T",
+        "fullscreen": "Mod+F", "maximize": "Mod+M", "overview": "Mod+Tab", "settings": "Mod+F1",
+        "lock": "Mod+Escape", "power": "Mod+Shift+E", "screenshot": "Print", "game_mode": "Mod+G",
+        "files": "Mod+E", "hide": "Mod+Shift+M",
+    },
+    "fonts": {"ui": "Noto Sans", "ui_size": 11, "mono": "Inconsolata Nerd Font Mono", "mono_size": 12},
+    "terminal": {"opacity": 0.78, "blur": True, "padding": 14},
+    "idle": {"dim": 240, "lock": 300, "screen_off": 600, "suspend": 1800, "lock_on_suspend": True},
+    "game_mode": False,
+}
+ACTIONS = {  # keybind id -> (label, niri action)
+    "terminal": ("Open a terminal", 'spawn "grim-de" "term";'),
+    "launcher": ("Find an app", 'spawn "grim-de" "launcher";'),
+    "close": ("Close the window", "close-window;"),
+    "float": ("Toggle floating", "toggle-window-floating;"),
+    "fullscreen": ("Fullscreen", "fullscreen-window;"),
+    "maximize": ("Maximize the column", "maximize-column;"),
+    "overview": ("Overview of all windows", "toggle-overview;"),
+    "settings": ("Grim DE Settings", 'spawn "grim-de-settings";'),
+    "lock": ("Lock the screen", 'spawn "grim-de" "lock";'),
+    "power": ("Power menu", 'spawn "grim-power";'),
+    "screenshot": ("Screenshot (drag an area)", "screenshot;"),
+    "game_mode": ("Game mode on/off", 'spawn "grim-de" "game" "toggle";'),
+    "files": ("File manager", 'spawn "thunar";'),
+    "hide": ("Hide the window into the dock", 'spawn "grim-de" "hide";'),
+}
+
+
+# ------------------------------------------------------------------ settings
+def merge(base, over):
+    out = copy.deepcopy(base)
+    for k, v in (over or {}).items():
+        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def load():
+    try:
+        user = json.loads(SETTINGS.read_text())
+    except Exception:
+        user = {}
+    return merge(DEFAULTS, user)
+
+
+def save(s):
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SETTINGS.with_suffix(".tmp"); tmp.write_text(json.dumps(s, indent=2)); tmp.replace(SETTINGS)
+
+
+def write(path, text, mode=0o644):
+    path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.read_text() == text:
+        return False
+    tmp = path.with_name(path.name + ".tmp"); tmp.write_text(text); os.chmod(tmp, mode); tmp.replace(path)
+    return True
+
+
+def themes():
+    out = {}
+    for d in (GRIM_SHARE / "rices", HOME / ".config/grimos/rices"):
+        if d.is_dir():
+            for p in sorted(d.glob("*.json")):
+                try:
+                    r = json.loads(p.read_text()); out[p.stem] = {"name": r["name"], "dark": r.get("dark", True), "colors": r["colors"]}
+                except Exception:
+                    pass
+    return out
+
+
+def palette(s):
+    t = themes().get(s["theme"]) or next(iter(themes().values()), None)
+    c = dict(t["colors"]) if t else {"bg": "#2e3440", "bg2": "#3b4252", "bg3": "#434c5e", "fg": "#d8dee9", "muted": "#7b88a1",
+                                     "accent": "#88c0d0", "accent_fg": "#2e3440", "accent2": "#b48ead", "urgent": "#bf616a",
+                                     "border_active": "#88c0d0", "border_inactive": "#3b4252"}
+    if s.get("accent"):
+        c["accent"] = c["border_active"] = s["accent"]
+    c["dark"] = t["dark"] if t else True
+    return c
+
+
+def running_grim():
+    return os.environ.get("GRIM_DE") == "1" and bool(os.environ.get("NIRI_SOCKET"))
+
+
+def run(*cmd):
+    try:
+        return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15).returncode
+    except Exception:
+        return 1
+
+
+def spawn(*cmd):
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except FileNotFoundError:
+        pass
+
+
+def out(*cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return ""
+
+
+def rx(app_id):
+    """niri wants a regex; app ids from the picker are plain names."""
+    return "^" + re.escape(app_id) + "$"
+
+
+# ------------------------------------------------------------------ generators
+def gen_niri(s, c):
+    o, g = s["outline"], s["glass"]
+    glass = g["enabled"] and not s["game_mode"]
+    active = o["active"] or c["border_active"]
+    active2 = o["active2"]
+    inactive = o["inactive"] or c["border_inactive"]
+    border = (f'active-gradient from="{active}" to="{active2}" angle=45 relative-to="workspace-view"' if active2
+              else f'active-color "{active}"')
+    win7 = o.get("style") == "win7"
+    width, radius = o["width"], o["radius"]
+    if win7:
+        # Windows 7 style: wide frosted light-blue frames, darker when unfocused, rounded top corners
+        width, radius = max(o["width"], 7), "8 8 3 3"
+        border = 'active-gradient from="#b9d4f0e6" to="#7aa7d8e6" angle=180 relative-to="window"'
+        inactive = "#c9d6e3cc"
+    theme = f"""// Grim DE theme (written by grim-de from settings.json; change it in Grim DE Settings)
+layout {{
+    gaps {s['gaps']}
+    center-focused-column "never"
+    background-color "transparent"
+    focus-ring {{ off; }}
+    border {{
+        {"on" if width > 0 else "off"}
+        width {max(width, 0)}
+        {border}
+        inactive-color "{inactive}"
+        urgent-color "{c['urgent']}"
+    }}
+    shadow {{
+        {"on" if g["shadows"] and not s["game_mode"] else "off"}
+        softness 26
+        spread 3
+        offset x=0 y=5
+        color "#00000066"
+    }}
+}}
+
+blur {{
+    passes {int(g['blur_passes'])}
+    offset {float(g['blur_offset']):.1f}
+    noise {float(g['noise']):.2f}
+    saturation {float(g['saturation']):.2f}
+}}
+
+animations {{
+    {"off" if s["game_mode"] else "slowdown 1.0"}
+}}
+
+overview {{
+    backdrop-color "{c['bg']}"
+}}
+
+// every window: rounded corners, the outline drawn as a frame only
+window-rule {{
+    geometry-corner-radius {radius}
+    clip-to-geometry true
+    draw-border-with-background false
+    {"background-effect { blur true; }" if glass else ""}
+}}
+"""
+    if glass and g["inactive_opacity"] < 1:
+        theme += f"""window-rule {{
+    match is-focused=false
+    opacity {float(g['inactive_opacity']):.2f}
+}}
+"""
+    theme += f"""// Grim Shell's bar and dock frost the area behind them themselves (blur regions)
+layer-rule {{
+    match namespace="^grim-(bar|dock)$"
+    {"background-effect { blur true; }" if glass else ""}
+    {"popups { background-effect { blur true; }; geometry-corner-radius " + str(min(o['radius'] + 4, 16)) + "; }" if glass else ""}
+}}
+layer-rule {{
+    match namespace="^(rofi|notifications|launcher)$"
+    {"background-effect { blur true; }" if glass else ""}
+}}
+"""
+    write(NIRI / "theme.kdl", theme)
+
+    # per-app transparency, and games always solid
+    apps = "// Per-app transparency (Grim DE Settings > Glass). Games are always solid and full speed.\n"
+    if glass:
+        for a in s["apps"]:
+            if not a.get("app_id"):
+                continue
+            apps += f"""
+window-rule {{
+    match app-id=r#"{rx(a['app_id'])}"#
+    opacity {float(a.get('opacity', 1)):.2f}
+}}
+window-rule {{
+    match app-id=r#"{rx(a['app_id'])}"# is-focused=false
+    opacity {float(a.get('inactive', a.get('opacity', 1))):.2f}
+}}
+"""
+    apps += """
+window-rule {
+    match app-id=r#"^(steam_app_.*|gamescope|.*\\.exe|Minecraft.*|org\\.vinegarhq\\.Sober)$"#
+    match title=r#"^Minecraft"#
+    opacity 1.0
+    background-effect { blur false; }
+    variable-refresh-rate true
+}
+window-rule {
+    match app-id=r#"^(steam|heroic|net\\.lutris\\.Lutris|org\\.prismlauncher\\.PrismLauncher)$"#
+    opacity 1.0
+}
+window-rule {
+    match app-id=r#"^os\\.grim\\.Settings$"#
+    match app-id=r#"^os\\.grim\\.DeSettings$"#
+    open-floating true
+}
+"""
+    write(NIRI / "apps.kdl", apps)
+
+    # keybinds
+    kb = s["keybinds"]
+    lines = []
+    for aid, (label, action) in ACTIONS.items():
+        key = kb.get(aid)
+        if key:
+            lines.append(f'    {key} hotkey-overlay-title="{label}" {{ {action} }}')
+    fixed = """
+    Mod+Left  { focus-column-left; }
+    Mod+Right { focus-column-right; }
+    Mod+Up    { focus-window-or-workspace-up; }
+    Mod+Down  { focus-window-or-workspace-down; }
+    Mod+Shift+Left  { move-column-left; }
+    Mod+Shift+Right { move-column-right; }
+    Mod+Shift+Up    { move-window-up-or-to-workspace-up; }
+    Mod+Shift+Down  { move-window-down-or-to-workspace-down; }
+    Mod+Minus { set-column-width "-10%"; }
+    Mod+Equal { set-column-width "+10%"; }
+    Mod+R     { switch-preset-column-width; }
+    Mod+Comma  { consume-or-expel-window-left; }
+    Mod+Period { consume-or-expel-window-right; }
+    Mod+WheelScrollDown cooldown-ms=150 { focus-workspace-down; }
+    Mod+WheelScrollUp   cooldown-ms=150 { focus-workspace-up; }
+    Mod+Shift+Slash { show-hotkey-overlay; }
+    XF86AudioRaiseVolume allow-when-locked=true { spawn "wpctl" "set-volume" "-l" "1.0" "@DEFAULT_AUDIO_SINK@" "5%+"; }
+    XF86AudioLowerVolume allow-when-locked=true { spawn "wpctl" "set-volume" "@DEFAULT_AUDIO_SINK@" "5%-"; }
+    XF86AudioMute        allow-when-locked=true { spawn "wpctl" "set-mute" "@DEFAULT_AUDIO_SINK@" "toggle"; }
+    XF86AudioMicMute     allow-when-locked=true { spawn "wpctl" "set-mute" "@DEFAULT_AUDIO_SOURCE@" "toggle"; }
+    XF86MonBrightnessUp   allow-when-locked=true { spawn "brightnessctl" "set" "5%+"; }
+    XF86MonBrightnessDown allow-when-locked=true { spawn "brightnessctl" "set" "5%-"; }
+    Ctrl+Print { screenshot-screen; }
+    Alt+Print  { screenshot-window; }
+"""
+    ws = "".join(f"    Mod+{i} {{ focus-workspace {i}; }}\n    Mod+Shift+{i} {{ move-column-to-workspace {i}; }}\n" for i in range(1, 10))
+    write(NIRI / "binds.kdl", "// Keybinds (Grim DE Settings > Keybinds). Super+drag moves, Super+right-drag resizes.\nbinds {\n"
+          + "\n".join(lines) + "\n" + fixed + ws + "}\n")
+
+    # displays
+    outs = "// Screens (Grim DE Settings > Displays)\n"
+    for name, d in (s["displays"] or {}).items():
+        outs += f'output "{name}" {{\n'
+        if d.get("off"):
+            outs += "    off\n"
+        else:
+            if d.get("mode"):
+                outs += f'    mode "{d["mode"]}"\n'
+            outs += f'    scale {float(d.get("scale", 1)):.2f}\n'
+            outs += '    variable-refresh-rate on-demand=true\n'
+        outs += "}\n"
+    write(NIRI / "outputs.kdl", outs)
+
+    # main config (rarely changes)
+    write(NIRI / "config.kdl", f"""// Grim DE: niri configuration (written by grim-de; your changes go in custom.kdl)
+include "theme.kdl"
+include "apps.kdl"
+include "binds.kdl"
+include "outputs.kdl"
+include optional=true "custom.kdl"
+
+input {{
+    keyboard {{
+        xkb {{ }}
+        numlock
+    }}
+    touchpad {{
+        tap
+        natural-scroll
+    }}
+    focus-follows-mouse max-scroll-amount="0%"
+}}
+
+prefer-no-csd
+screenshot-path "~/Pictures/Screenshots/Screenshot from %Y-%m-%d %H-%M-%S.png"
+hotkey-overlay {{ skip-at-startup; }}
+gestures {{
+    hot-corners {{
+        off
+    }}
+}}
+
+environment {{
+    GRIM_DE "1"
+    QT_QPA_PLATFORM "wayland"
+    ELECTRON_OZONE_PLATFORM_HINT "auto"
+}}
+
+spawn-at-startup "grim-de" "session-start"
+""")
+
+
+def gen_shell(s, c):
+    """One JSON the Quickshell shell watches: colours, fonts, bar, dock, glass."""
+    # files the shell watches: its saved state (Do Not Disturb) and the "updates finished" stamp
+    home = Path(os.environ.get("HOME", "~")).expanduser()
+    for d in (Path(os.environ.get("XDG_STATE_HOME", home / ".local/state")) / "grim-de",
+              Path(os.environ.get("XDG_CACHE_HOME", home / ".cache")) / "grimos"):
+        d.mkdir(parents=True, exist_ok=True)
+    stamp = Path(os.environ.get("XDG_CACHE_HOME", home / ".cache")) / "grimos" / "updated"
+    if not stamp.exists():
+        stamp.write_text("0\n")
+    write(CFG / "shell.json", json.dumps({
+        "colors": c, "fonts": s["fonts"], "bar": s["bar"], "dock": s["dock"],
+        "glass": s["glass"]["enabled"] and not s["game_mode"], "panel_opacity": s["glass"]["panel_opacity"],
+        "radius": s["outline"]["radius"], "game_mode": s["game_mode"], "outline": s["outline"]["width"],
+        "workspace_style": s.get("workspace_style", "dots"), "win7": s["outline"].get("style") == "win7",
+    }, indent=2))
+
+
+def ansi(c):
+    if c.get("dark", True):
+        return ["#3b4252", "#bf616a", "#a3be8c", "#ebcb8b", "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0",
+                "#4c566a", "#d06f79", "#b1d196", "#f0d399", "#8cafd2", "#c895bf", "#93ccdc", "#eceff4"]
+    return ["#2e3440", "#a3343f", "#4f7a2e", "#946200", "#2f5d8a", "#7a3f86", "#2c7372", "#d3d1c9",
+            "#4a4a4a", "#c1121f", "#5a9a3a", "#b37a00", "#3c76ad", "#9a52a8", "#389290", "#ecebe6"]
+
+
+def gen_apps(s, c):
+    t, f = s["terminal"], s["fonts"]
+    a = ansi(c)
+    names = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"]
+    op = 1.0 if s["game_mode"] else float(t["opacity"])
+    write(CFG / "alacritty.toml", f"""# Grim DE terminal (Grim DE Settings > Terminal)
+[window]
+opacity = {op:.2f}
+blur = {"true" if t["blur"] and not s["game_mode"] else "false"}
+padding = {{ x = {int(t['padding'])}, y = {int(t['padding'])} }}
+decorations = "None"
+dynamic_padding = true
+
+[font]
+size = {f['mono_size']}
+normal = {{ family = "{f['mono']}" }}
+
+[colors.primary]
+background = "{c['bg']}"
+foreground = "{c['fg']}"
+
+[colors.cursor]
+text = "{c['bg']}"
+cursor = "{c['accent']}"
+
+[colors.selection]
+background = "{c['accent']}"
+text = "{c['accent_fg']}"
+
+[colors.normal]
+""" + "\n".join(f'{n} = "{a[i]}"' for i, n in enumerate(names)) + "\n\n[colors.bright]\n"
+          + "\n".join(f'{n} = "{a[i + 8]}"' for i, n in enumerate(names)) + "\n")
+
+    write(CFG / "mako", f"""# Grim DE notifications
+font={f['ui']} {f['ui_size']}
+background-color={c['bg2']}e6
+text-color={c['fg']}
+border-color={c['accent']}
+border-size={s['outline']['width']}
+border-radius={s['outline']['radius']}
+margin=12
+padding=12,14
+default-timeout=6000
+anchor=top-right
+""")
+    rr = s["outline"]["radius"]
+    write(CFG / "rofi.rasi", f"""/* Grim DE app finder */
+* {{ bg: {c['bg']}d9; bg3: {c['bg3']}; fg: {c['fg']}; mu: {c['muted']}; ac: {c['accent']}; af: {c['accent_fg']};
+    background-color: transparent; text-color: @fg; font: "{f['ui']} {f['ui_size'] + 1}"; }}
+window {{ width: 560px; background-color: @bg; border: {s['outline']['width']}px; border-color: @ac; border-radius: {rr}px; padding: 14px; }}
+inputbar {{ children: [entry]; padding: 9px 12px; background-color: @bg3; border-radius: {max(rr - 2, 0)}px; }}
+entry {{ placeholder: "Find an app"; placeholder-color: @mu; }}
+listview {{ lines: 8; spacing: 2px; margin: 10px 0 0 0; scrollbar: false; }}
+element {{ padding: 7px 10px; spacing: 10px; border-radius: {max(rr - 2, 0)}px; }}
+element selected {{ background-color: @ac; text-color: @af; }}
+element-text {{ text-color: inherit; vertical-align: 0.5; }}
+element-icon {{ size: 24px; }}
+""")
+    write(CFG / "swaylock", f"""# Grim DE lock screen
+image={s['wallpaper']}
+scaling=fill
+color={c['bg'].lstrip('#')}
+indicator-radius=90
+indicator-thickness=8
+ring-color={c['bg2'].lstrip('#')}
+key-hl-color={c['accent'].lstrip('#')}
+inside-color={c['bg'].lstrip('#')}cc
+line-color=00000000
+separator-color=00000000
+text-color={c['fg'].lstrip('#')}
+ring-ver-color={c['accent'].lstrip('#')}
+inside-ver-color={c['bg'].lstrip('#')}cc
+ring-wrong-color={c['urgent'].lstrip('#')}
+inside-wrong-color={c['bg'].lstrip('#')}cc
+font={f['ui']}
+show-failed-attempts
+ignore-empty-password
+""")
+
+
+def idle_cmd(s):
+    i = s["idle"]
+    cmd = ["swayidle", "-w"]
+    if i.get("dim"):
+        cmd += ["timeout", str(i["dim"]), "brightnessctl -s set 30%", "resume", "brightnessctl -r"]
+    if i.get("lock"):
+        cmd += ["timeout", str(i["lock"]), "grim-de lock"]
+    if i.get("screen_off"):
+        cmd += ["timeout", str(i["screen_off"]), "niri msg action power-off-monitors", "resume", "niri msg action power-on-monitors"]
+    if i.get("suspend"):
+        cmd += ["timeout", str(i["suspend"]), "systemctl suspend"]
+    if i.get("lock_on_suspend", True):
+        cmd += ["before-sleep", "grim-de lock"]
+    return cmd
+
+
+def apply(s=None, reload=True):
+    s = s or load()
+    c = palette(s)
+    gen_niri(s, c)
+    gen_shell(s, c)
+    gen_apps(s, c)
+    if reload and running_grim():
+        restart_bg(s)
+        if os.environ.get("GRIM_DE_TEST") != "1":
+            run("makoctl", "reload")
+            restart_idle(s)
+
+
+def restart_bg(s):
+    if os.environ.get("GRIM_DE_TEST") == "1":
+        # test run inside another desktop: only replace the test's own wallpaper process
+        run("pkill", "-f", "swaybg.*" + re.escape(str(CFG.parent.parent)))
+        run("pkill", "-f", "swaybg -i " + str(GRIM_SHARE))
+    else:
+        run("pkill", "-x", "swaybg")
+    if Path(s["wallpaper"]).exists():
+        spawn("swaybg", "-i", s["wallpaper"], "-m", s["wallpaper_mode"])
+
+
+def restart_idle(s):
+    run("pkill", "-x", "swayidle")
+    spawn(*idle_cmd(s))
+
+
+# ------------------------------------------------------------------ session
+def session_start():
+    s = load()
+    test = os.environ.get("GRIM_DE_TEST") == "1"   # nested test run: don't touch the host's idle, tray or notifications
+    apply(s, reload=False)
+    restart_bg(s)
+    if test:
+        spawn("quickshell", "-p", str(Path(os.environ.get("GRIM_SHELL_DIR", SHARE / "shell"))))
+        return
+    run("pkill", "-x", "mako")   # Grim Shell is the notification server (centre + Do Not Disturb)
+    restart_idle(s)
+    shell = Path(os.environ.get("GRIM_SHELL_DIR", SHARE / "shell"))
+    run("pkill", "-f", "quickshell.*grim-de/shell")
+    spawn("quickshell", "-p", str(shell))
+    for agent in ("/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1", "/usr/lib/hyprpolkitagent/hyprpolkitagent"):
+        if os.path.exists(agent):
+            spawn(agent); break
+    spawn("nm-applet", "--indicator")
+
+
+# ------------------------------------------------------------------ helpers for the settings app
+def outputs():
+    data = json.loads(out("niri", "msg", "-j", "outputs") or "{}")
+    res = []
+    for name, o in data.items():
+        modes = [f"{m['width']}x{m['height']}@{m['refresh_rate'] / 1000:.3f}" for m in o.get("modes", [])]
+        cur = o.get("current_mode")
+        res.append({"name": name, "make": f"{o.get('make', '')} {o.get('model', '')}".strip(), "modes": modes,
+                    "mode": modes[cur] if cur is not None and cur < len(modes) else "",
+                    "scale": (o.get("logical") or {}).get("scale", 1.0)})
+    return res
+
+
+def windows():
+    data = json.loads(out("niri", "msg", "-j", "windows") or "[]")
+    seen = {}
+    for w in data:
+        if w.get("app_id"):
+            seen.setdefault(w["app_id"], w.get("title", ""))
+    return [{"app_id": k, "title": v} for k, v in seen.items()]
+
+
+def set_path(s, key, value):
+    parts = key.split(".")
+    d = s
+    for p in parts[:-1]:
+        d = d.setdefault(p, {})
+    d[parts[-1]] = value
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__); return
+    cmd, args = argv[0], argv[1:]
+    if cmd == "apply":
+        apply()
+    elif cmd == "get":
+        s = load()
+        if args:
+            for p in args[0].split("."):
+                s = s[p]
+        print(json.dumps(s, indent=2))
+    elif cmd == "set" and len(args) >= 2:
+        try:
+            val = json.loads(args[1])
+        except json.JSONDecodeError:
+            val = args[1]
+        try:
+            user = json.loads(SETTINGS.read_text())
+        except Exception:
+            user = {}
+        set_path(user, args[0], val)
+        save(user)
+        apply()
+    elif cmd == "reset" and args:
+        try:
+            user = json.loads(SETTINGS.read_text())
+        except Exception:
+            user = {}
+        parts = args[0].split("."); d = user
+        for p in parts[:-1]:
+            d = d.get(p, {})
+        d.pop(parts[-1], None)
+        save(user); apply()
+    elif cmd == "palette":
+        print(json.dumps(palette(load())))
+    elif cmd == "themes":
+        print(json.dumps(themes()))
+    elif cmd == "wallpapers":
+        pics = []
+        for d in (GRIM_SHARE / "wallpapers", HOME / "Pictures/Wallpapers", HOME / "Pictures"):
+            if d.is_dir():
+                pics += [str(p) for p in sorted(d.iterdir()) if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")]
+        print(json.dumps(list(dict.fromkeys(pics))))
+    elif cmd == "windows":
+        print(json.dumps(windows()))
+    elif cmd == "outputs":
+        print(json.dumps(outputs()))
+    elif cmd == "output" and len(args) >= 3:
+        res, _, hz = args[1].partition("@")
+        a = run("niri", "msg", "output", args[0], "mode", f"{res}@{hz}")
+        b = run("niri", "msg", "output", args[0], "scale", args[2])
+        sys.exit(a or b)
+    elif cmd == "hide":
+        # the focused window goes to the workspace named "hidden" (made from niri's spare empty
+        # workspace the first time); click its dock icon to bring it back
+        try:
+            wss = json.loads(out("niri", "msg", "-j", "workspaces") or "[]")
+        except ValueError:
+            wss = []
+        if not any(w.get("name") == "hidden" for w in wss):
+            focused = next((w for w in wss if w.get("is_focused")), None)
+            mine = [w for w in wss if focused and w["output"] == focused["output"]]
+            if mine:
+                run("niri", "msg", "action", "set-workspace-name", "--workspace", str(max(w["idx"] for w in mine)), "hidden")
+        if run("niri", "msg", "action", "move-window-to-workspace", "--focus", "false", "hidden") != 0:
+            sys.exit("grim-de: couldn't hide the window (is this a Grim DE session?)")
+    elif cmd == "game":
+        s = load()
+        on = {"on": True, "off": False}.get(args[0] if args else "toggle", not s["game_mode"])
+        try:
+            user = json.loads(SETTINGS.read_text())
+        except Exception:
+            user = {}
+        user["game_mode"] = on; save(user); apply()
+        run("notify-send", "-a", "Grim", "Game mode " + ("on" if on else "off"),
+            "No blur, no transparency, no animations." if on else "Glass and animations are back.")
+    elif cmd == "term":
+        os.execvp("alacritty", ["alacritty", "--config-file", str(CFG / "alacritty.toml"), *args])
+    elif cmd == "launcher":
+        if run("pkill", "-x", "rofi") == 0:
+            return
+        # options as flags (not a configuration {} block): rofi misreads some block layouts
+        os.execvp("rofi", ["rofi", "-show", "drun", "-modes", "drun,run", "-show-icons", "-icon-theme", "Papirus-Dark",
+                           "-display-drun", "", "-drun-display-format", "{name}",
+                           "-no-config", "-theme", str(CFG / "rofi.rasi")])
+    elif cmd == "lock":
+        if run("pgrep", "-x", "swaylock") != 0:
+            os.execvp("swaylock", ["swaylock", "-f", "-C", str(CFG / "swaylock")])
+    elif cmd == "session-start":
+        session_start()
+    else:
+        print(__doc__); sys.exit(1)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

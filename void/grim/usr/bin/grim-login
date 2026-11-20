@@ -1,0 +1,15 @@
+#!/bin/bash
+# grim-login: runs once when you log in on a console (from /etc/profile.d and fish).
+# Shows grimfetch, explains low-RAM mode, and starts your desktop on tty1.
+[[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] && exit 0
+t=$(tty 2>/dev/null); [[ $t == /dev/tty* ]] || exit 0
+R=$'\e[31m' G=$'\e[90m' N=$'\e[0m'
+command -v grimfetch >/dev/null && grimfetch
+if [[ $(basename "$(readlink -f /etc/runit/runsvdir/current)") == lowram ]]; then
+    printf '  %sLow-RAM mode%s %s- no desktop, no network, nothing in the background.%s\n' "$R" "$N" "$G" "$N"
+    printf '  %sgrimctl mode desktop%s  start everything    %sgrim-wifi%s  get online    %sgrimctl mode%s  RAM use\n\n' "$R" "$N" "$R" "$N" "$R" "$N"
+    exit 0
+fi
+[[ -e /etc/grim/live ]] && exit 0                    # the USB runs the installer instead
+[[ $t == /dev/tty1 && $EUID -ne 0 ]] && exec grim-session
+printf '  %sgrimhelp%s help and apps    %sgrim-session%s start a desktop    %sgrimctl%s system\n\n' "$R" "$N" "$R" "$N" "$R" "$N"

@@ -1,0 +1,15 @@
+Low-RAM mode
+============
+A console and nothing else: no desktop, no network, no services. Uses the
+least RAM Grim Void can. Good for old PCs, or one heavy program.
+
+  Boot menu: "Grim Void - Low RAM, no desktop"   (USB and installed system)
+  grimctl mode             RAM use and the biggest programs
+  grimctl mode lowram      switch now (closes the desktop)
+  grimctl mode desktop     start everything again
+  sudo grimctl boot lowram     always start in low-RAM mode
+  sudo grimctl boot desktop    back to normal
+  grim-wifi                get online while in low-RAM mode
+
+How it works: runit runlevels. "lowram" on the kernel line picks
+/etc/runit/runsvdir/lowram, which only has the tty1 and tty2 logins.

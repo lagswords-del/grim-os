@@ -1,0 +1,200 @@
+#!/bin/bash
+# grimhelp: Grim Void's help and app centre (a TUI).
+#   grimhelp            the menu
+#   grimhelp apps       install apps from the list
+#   grimhelp search     search Void, Flathub, or build from source
+#   grimhelp TOPIC      read a help page (start, apps, desktops, keys, lowram, source, system, spotify)
+SHARE=/usr/share/grim
+HELP=$SHARE/help
+export DIALOGRC=$SHARE/dialogrc
+BT="Grim Void 1.2.0"
+
+d() { dialog --backtitle "$BT" "$@" 3>&1 1>&2 2>&3; }
+pause() { printf '\n\e[90mPress Enter to go back.\e[0m'; read -r _; }
+run() { clear; "$@"; pause; }
+
+# --------------------------------------------------------------- app list
+apps_menu() {
+    local cats c
+    mapfile -t cats < <(grep -v '^#' "$SHARE/apps.list" | cut -d'|' -f1 | awk '!s[$0]++')
+    while :; do
+        local items=()
+        for c in "${cats[@]}"; do items+=("$c" "$(grep -c "^$c|" "$SHARE/apps.list") apps"); done
+        c=$(d --title "Install apps" --cancel-label "Back" --menu "Pick a group. Apps marked [Flathub] come from Flathub because they aren't built for musl." 20 70 12 "${items[@]}") || return
+        apps_pick "$c"
+    done
+}
+
+apps_pick() {
+    local cat=$1 items=() line name what target tag sel picked=()
+    while IFS='|' read -r _ name what target; do
+        tag=""; [[ $target == flatpak:* ]] && tag=" [Flathub]"
+        local state=off; is_installed "$target" && state=on
+        items+=("$name" "$what$tag" "$state")
+    done < <(grep "^$cat|" "$SHARE/apps.list")
+    sel=$(d --title "$cat" --cancel-label "Back" --separate-output --checklist \
+        "Space ticks an app, Enter installs the ticked ones. Unticking an installed app removes it." 22 78 14 "${items[@]}") || return
+    local add=() del=()
+    while IFS='|' read -r _ name what target; do
+        if grep -qxF "$name" <<<"$sel"; then is_installed "$target" || add+=("$target")
+        else is_installed "$target" && del+=("$target"); fi
+    done < <(grep "^$cat|" "$SHARE/apps.list")
+    ((${#add[@]} + ${#del[@]})) || return
+    clear
+    local t
+    for t in "${add[@]}"; do install_target "$t"; done
+    for t in "${del[@]}"; do remove_target "$t"; done
+    pause
+}
+
+is_installed() {
+    local t=$1
+    case $t in
+        void:*) local p; p=${t#void:}; p=${p%% *}; xbps-query "$p" >/dev/null 2>&1 ;;
+        flatpak:*) command -v flatpak >/dev/null && flatpak info "${t#flatpak:}" >/dev/null 2>&1 ;;
+    esac
+}
+install_target() {
+    case $1 in
+        void:*) # shellcheck disable=SC2086
+                sudo grimctl install ${1#void:} ;;
+        flatpak:*) sudo grimctl install "@flatpak:${1#flatpak:}" ;;
+    esac
+}
+remove_target() {
+    case $1 in
+        void:*) # shellcheck disable=SC2086
+                sudo grimctl remove ${1#void:} ;;
+        flatpak:*) sudo grimctl remove "@flatpak:${1#flatpak:}" ;;
+    esac
+}
+
+# --------------------------------------------------------------- search
+search_menu() {
+    local q items=() line pick
+    q=$(d --title "Search" --inputbox "What are you looking for? (a name or a word like 'pdf' or 'music')" 9 64) || return
+    [[ -z $q ]] && return
+    dialog --backtitle "$BT" --infobox "Searching Void and Flathub for \"$q\"..." 5 60
+    while IFS= read -r line; do
+        local name desc; name=$(sed -E 's/^\[.\] //; s/-[^-]+_[0-9]+ .*//' <<<"$line"); desc=$(sed -E 's/^\[.\] [^ ]+ +//' <<<"$line")
+        [[ -n $name ]] && items+=("void:$name" "${desc:0:58}")
+    done < <(xbps-query -Rs "$q" 2>/dev/null | head -60)
+    if command -v flatpak >/dev/null; then
+        while IFS=$'\t' read -r id name; do
+            [[ -n $id && $id == *.* ]] && items+=("flatpak:$id" "[Flathub] ${name:0:48}")
+        done < <(flatpak search --columns=application,name "$q" 2>/dev/null | head -25)
+    fi
+    items+=("git:" "Build something from a git link (any project) ...")
+    ((${#items[@]} > 2)) || { d --msgbox "Nothing found for \"$q\"." 6 50; return; }
+    pick=$(d --title "Results for \"$q\"" --cancel-label "Back" --menu "Pick one:" 22 80 15 "${items[@]}") || return
+    case $pick in
+        void:*)
+            local name=${pick#void:} how
+            how=$(d --title "$name" --menu "How should $name be installed?" 12 72 3 \
+                1 "Ready-made package (fast)" \
+                2 "Compile from source on this PC (-march=native, slower)" \
+                3 "Show its details") || return
+            case $how in
+                1) run sudo grimctl install "$name" ;;
+                2) run sudo grimctl build "$name" ;;
+                3) run xbps-query -R "$name" ;;
+            esac ;;
+        flatpak:*) run sudo grimctl install "@flatpak:${pick#flatpak:}" ;;
+        git:) build_git ;;
+    esac
+}
+
+build_git() {
+    local url
+    url=$(d --title "Build from a git link" --inputbox \
+        "Paste a git link (GitHub, GitLab, Codeberg...). Grim works out how to build it (meson, cmake, cargo, go, make), compiles it for your CPU and installs it as a package you can update and remove." 12 74) || return
+    [[ -n $url ]] && run sudo grimctl build "$url"
+}
+
+remove_menu() {
+    local items=() p sel
+    while read -r p; do [[ -n $p ]] && items+=("$p" "" off); done < <(grimctl get packages)
+    ((${#items[@]})) || { d --msgbox "No apps in the system file yet." 6 46; return; }
+    sel=$(d --title "Remove apps" --separate-output --checklist "Tick the apps to remove:" 20 70 12 "${items[@]}") || return
+    [[ -n $sel ]] && { mapfile -t sel <<<"$sel"; run sudo grimctl remove "${sel[@]}"; }
+}
+
+# --------------------------------------------------------------- settings
+wallpaper_menu() {
+    local items=() f pick
+    for f in /usr/share/grim/wallpapers/* "$HOME"/Pictures/*.{png,jpg,jpeg,webp}; do [[ -f $f ]] && items+=("$f" ""); done
+    items+=("other" "type a path...")
+    pick=$(d --title "Wallpaper" --menu "Now: $(grimctl wallpaper)\n\nOr from a terminal: grimctl wallpaper set FILE" 20 76 10 "${items[@]}") || return
+    [[ $pick == other ]] && { pick=$(d --inputbox "Path to the picture:" 8 70 "$HOME/") || return; }
+    clear; grimctl wallpaper set "$pick"; pause
+}
+
+desktop_menu() {
+    local now pick
+    now=$(grimctl get desktop)
+    pick=$(d --title "Desktop at login" --default-item "${now:-icewm}" --menu "What starts when you log in on tty1? (now: ${now:-none})" 16 64 8 \
+        icewm "IceWM: light, with a taskbar" niri "Niri: scrolling tiling (Wayland)" openbox "Openbox: floating" \
+        i3 "i3: tiling" dwm "dwm: tiny tiling" river "river: tiling (Wayland)" ask "ask every time" none "just the terminal") || return
+    case $pick in icewm|niri|openbox|i3|dwm|river)
+        command -v "$pick" >/dev/null || { clear; sudo grimctl install "$pick" $( [[ $pick == niri || $pick == river ]] && echo "Waybar mako swaybg fuzzel" ); }
+    esac
+    clear
+    sudo sed -i -E "s/^desktop *=[^#]*/desktop = $pick   /" /etc/grim/system.conf && echo "Desktop at login: $pick"; pause
+}
+
+lowram_menu() {
+    local c
+    c=$(d --title "Low-RAM mode" --menu "A console with nothing else running: no desktop, network or services.\nThe boot menu also has a 'Low RAM' entry." 14 72 4 \
+        1 "Switch to low-RAM mode now" 2 "Back to the full system now" \
+        3 "Always start in low-RAM mode" 4 "Start normally (desktop)") || return
+    clear
+    case $c in 1) grimctl mode lowram ;; 2) grimctl mode desktop ;; 3) sudo grimctl boot lowram ;; 4) sudo grimctl boot desktop ;; esac
+    pause
+}
+
+fetch_menu() {
+    local c
+    c=$(d --title "grimfetch" --menu "Which logo should grimfetch show?" 11 60 2 void "the Grim Void ring" reaper "the Grim OS reaper") || return
+    clear; grimctl fetch logo "$c"; grimfetch --logo "$c"; pause
+}
+
+help_menu() {
+    local items=() f pick
+    for f in "$HELP"/*.txt; do items+=("$(basename "$f" .txt)" "$(head -1 "$f")"); done
+    while pick=$(d --title "Help" --cancel-label "Back" --menu "Pick a page:" 18 70 10 "${items[@]}"); do
+        d --title "$pick" --exit-label "Back" --textbox "$HELP/$pick.txt" 30 90
+    done
+}
+
+main_menu() {
+    local c
+    while :; do
+        c=$(d --title "grimhelp" --cancel-label "Exit" --menu "Help and apps for Grim Void." 22 66 13 \
+            1 "Install apps" \
+            2 "Search for anything (Void, Flathub, source)" \
+            3 "Build something from a git link" \
+            4 "Remove apps" \
+            5 "Update everything" \
+            6 "Wi-Fi" \
+            7 "Wallpaper" \
+            8 "Desktop at login" \
+            9 "Low-RAM mode" \
+            10 "grimfetch logo" \
+            11 "Edit the system file (/etc/grim/system.conf)" \
+            12 "Help pages") || { clear; exit 0; }
+        case $c in
+            1) apps_menu ;; 2) search_menu ;; 3) build_git ;; 4) remove_menu ;;
+            5) run sudo grimctl update ;; 6) run grim-wifi ;; 7) wallpaper_menu ;; 8) desktop_menu ;;
+            9) lowram_menu ;; 10) fetch_menu ;; 11) clear; sudo grimctl edit; pause ;; 12) help_menu ;;
+        esac
+    done
+}
+
+case ${1:-} in
+    "") main_menu ;;
+    apps|install) apps_menu; clear ;;
+    search) search_menu; clear ;;
+    -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) [[ -f $HELP/$1.txt ]] && { cat "$HELP/$1.txt"; exit; }
+       echo "No help page called $1. Pages: $(cd "$HELP" && ls | sed 's/\.txt$//' | tr '\n' ' ')"; exit 1 ;;
+esac

@@ -1,0 +1,18 @@
+Keys (the same on every desktop)
+================================
+  Super + Enter        terminal
+  Super + Q            close the window
+  Super + F            fullscreen on/off
+  Super + T            floating on/off   (IceWM and Openbox float anyway: maximise on/off)
+  Super + D            app launcher
+  Super + W            Wi-Fi
+  Super + 1..9         workspace / tag
+  Super + Shift + 1..9 move the window there
+  Super + Shift + E    log out
+  Print                screenshot to ~/Pictures
+  Super + left drag    move a window      (IceWM)
+  Super + right drag   resize a window    (IceWM)
+
+dwm also:  Super+J/K focus, Super+H/L resize, Super+Shift+Enter swap with main,
+           Super+Shift+T tile, Super+Shift+F floating layout, Super+M monocle, Super+B bar
+niri also: Super+arrows focus, Super+R column width, Super+O overview

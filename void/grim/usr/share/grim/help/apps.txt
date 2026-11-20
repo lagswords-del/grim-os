@@ -1,0 +1,14 @@
+Installing apps
+===============
+  grimhelp                 menus: an app list by group, or search for anything
+  grimctl search WORDS     search Void's packages and Flathub
+  sudo grimctl install firefox             a Void package
+  sudo grimctl install @flatpak:ID         a Flathub app
+  sudo grimctl remove NAME                 uninstall it
+  sudo grimctl update                      update everything
+
+Everything you install this way is written into /etc/grim/system.conf.
+
+Grim Void uses musl, so a few programs built only for glibc (Chromium, VS Code,
+Steam, Discord, Spotify's app) come from Flathub instead. grimhelp does this for you.
+The AUR is for Arch only: on Void the equivalent is building from source (grimhelp source).

@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# grimsettings: Grim Settings.
+#   grimsettings        the window on a desktop, the terminal version otherwise
+#   grimsettings tui    the terminal version (works over SSH and on a text console)
+#   grimsettings gui    the window
+set -uo pipefail
+
+SHARE=/usr/share/grimos
+BT="Grim Settings 1.1.5"
+CFG=${XDG_CONFIG_HOME:-$HOME/.config}
+STATE=$CFG/grimos/rice.json
+export DIALOGRC=$SHARE/dialogrc
+export NCURSES_NO_UTF8_ACS=1
+
+d() { dialog --backtitle "$BT" "$@" 3>&1 1>&2 2>&3; }
+msg() { dialog --backtitle "$BT" --title "${2:-Grim Settings}" --msgbox "$1" 0 0; }
+ask() { dialog --backtitle "$BT" --title "${2:-Grim Settings}" --yesno "$1" 0 0; }
+json_get() { grep -oE "\"$2\"[[:space:]]*:[[:space:]]*(\"[^\"]*\"|true|false|null)" "$1" 2>/dev/null | head -1 | sed -E 's/.*:[[:space:]]*"?([^"]*)"?$/\1/'; }
+
+current_rice() { local r; r=$(json_get "$STATE" rice); echo "${r:-grim}"; }
+have_rice_tool() { command -v grim-rice >/dev/null && command -v python3 >/dev/null; }
+
+run_rice() {
+    if ! have_rice_tool; then
+        msg "Rices change how the desktops look, and this system has no desktop installed.\n\nInstall one with griminstall, or add one to /etc/grimos/packages.conf if you use the package list." "No desktop"
+        return 1
+    fi
+    clear
+    printf '\e[1m:: grim-rice %s\e[0m\n' "$*"
+    if grim-rice "$@"; then sleep 1; return 0; fi
+    read -rp "Something went wrong (see above). Press Enter... " _
+    return 1
+}
+
+# ---------------------------------------------------------------- pages
+page_rices() {
+    local cur items=() f id name desc state
+    cur=$(current_rice)
+    for f in "$SHARE"/rices/*.json; do
+        id=$(basename "$f" .json)
+        name=$(json_get "$f" name); desc=$(json_get "$f" description)
+        state=off; [[ $id == "$cur" ]] && state=on
+        items+=("$id" "$name: $desc" "$state")
+    done
+    local pick
+    pick=$(d --title "Rices" --radiolist \
+        "Pick a rice with SPACE, then ENTER to apply it to every desktop on this computer.\nIn use now: $cur" \
+        16 90 6 "${items[@]}") || return
+    [[ $pick == "$cur" ]] && { msg "$pick is already in use." "Rices"; return; }
+    run_rice apply "$pick" --all && msg "Applied $pick.\n\nDesktops that are running now were reloaded. Others pick it up next time you log in." "Rices"
+}
+
+page_dock() {
+    local dock; dock=$(json_get "$STATE" dock)
+    local now="from the rice"; [[ $dock == true ]] && now="on"; [[ $dock == false ]] && now="off"
+    local c
+    c=$(d --title "Dock" --menu "Show the dock? (now: $now)\n\nPlank on X11, nwg-dock on Wayland, Dash to Panel on GNOME." 14 64 2 \
+        on "Show the dock" off "Hide the dock") || return
+    run_rice dock "$c" && msg "Dock: $c" "Dock"
+}
+
+page_bar() {
+    local c
+    c=$(d --title "Bar" --menu "Where should the bar sit? (now: $(json_get "$STATE" bar_position | sed 's/^$/top/'))" 12 56 2 \
+        top "Top of the screen" bottom "Bottom of the screen") || return
+    run_rice bar "$c" && msg "Bar moved to the $c." "Bar"
+}
+
+page_barstyle() {
+    local cur; cur=$(json_get "$STATE" bar_style); cur=${cur:-classic}
+    local c
+    c=$(d --title "Bar style" --default-item "$cur" --menu "Pick a bar style. It uses your rice's colours.\nNow: $cur" 18 76 7 \
+        classic         "Classic: full strip with date, IP, disk, temperature" \
+        reaper-pills    "Reaper Pills: three floating pills, reaper launcher" \
+        red-island      "Red Island: everything in one centred island" \
+        nord-pills      "Nord Pills: three pills, numbered workspaces" \
+        frost-glass     "Frost Glass: see-through with an accent outline" \
+        graphite-icons  "Graphite Icons: icons only, dot workspaces" \
+        cachyos-minimal "CachyOS Minimal: launcher, workspace pill, bold clock") || return
+    run_rice set bar_style "\"$c\"" && msg "Bar style: $c" "Bar style"
+}
+
+page_fetch() {
+    local user=$CFG/grimfetch/config.toml
+    if [[ ! -f $user ]]; then mkdir -p "$(dirname "$user")"; cp /etc/grimfetch.toml "$user" 2>/dev/null || : >"$user"; fi
+    local cur; cur=$(grep -oE '^title_color *= *"[^"]*"' "$user" | cut -d'"' -f2)
+    local c
+    c=$(d --title "grimfetch" --default-item "${cur:-red}" --menu "Colour of the titles (OS, Kernel, ...) in grimfetch.\nNow: ${cur:-red}" 18 60 9 \
+        red "Red (Grim OS default)" bright_red "Bright red" white "White" cyan "Cyan (Nord Snow)" \
+        blue "Blue" magenta "Magenta" green "Green" yellow "Yellow" custom "Type a #rrggbb colour") || return
+    if [[ $c == custom ]]; then
+        c=$(d --title "grimfetch" --inputbox "Colour as #rrggbb:" 8 40 "#c1121f") || return
+        [[ $c =~ ^#[0-9a-fA-F]{6}$ ]] || { msg "\"$c\" is not a #rrggbb colour." "grimfetch"; return; }
+    fi
+    if grep -qE '^title_color' "$user"; then sed -i -E "s|^title_color *=.*|title_color = \"$c\"|" "$user"
+    else echo "title_color = \"$c\"" >>"$user"; fi
+    clear; grimfetch; read -rp "Saved in $user. Press Enter to go back... " _
+}
+
+page_keys() {
+    msg "The same keys on every desktop (Super is the Windows key):
+
+  Super + T            toggle floating
+                       (maximize on IceWM, Openbox, XFCE, GNOME, KDE)
+  Super + Q            close the window
+  Super + Space        find an app
+  Super + Return       terminal
+  Super + F1           Grim Settings
+  Super + Shift + E    power menu
+  Print                screenshot: drag an area
+  Super + left drag    move a window
+  Super + right drag   resize a window" "Shortcuts"
+}
+
+page_desktops() {
+    local list
+    if have_rice_tool; then list=$(grim-rice desktops | sed 's/^\*/  (running) /'); fi
+    msg "Desktops on this computer:\n\n${list:-  none (text only)}\n\nAdd another with your package list or: sudo pacman -S <name>" "Desktops"
+}
+
+page_about() {
+    clear; grimfetch 2>/dev/null
+    echo "   Grim OS 1.1.5. Help: grimhelp   Update: update   Settings window: grimsettings gui"
+    read -rp "   Press Enter to go back... " _
+}
+
+tui() {
+    command -v dialog >/dev/null || { echo "grimsettings tui needs dialog: sudo pacman -S dialog"; exit 1; }
+    while :; do
+        local c
+        c=$(d --title "Grim Settings" --cancel-label "Exit" --menu "Rice in use: $(current_rice)" 18 60 10 \
+            rices    "Rices (colours, wallpaper, borders)" \
+            dock     "Dock on or off" \
+            barstyle "Bar style" \
+            bar      "Bar position" \
+            fetch    "grimfetch title colour" \
+            keys     "Shortcuts" \
+            desktops "Desktops on this computer" \
+            about    "About Grim OS") || { clear; exit 0; }
+        case $c in
+            rices) page_rices ;; dock) page_dock ;; bar) page_bar ;; barstyle) page_barstyle ;; fetch) page_fetch ;;
+            keys) page_keys ;; desktops) page_desktops ;; about) page_about ;;
+        esac
+    done
+}
+
+gui() {
+    if [[ -z ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]]; then
+        echo "No desktop here, opening the terminal version (grimsettings tui)."; sleep 1; tui; return
+    fi
+    exec grim-settings
+}
+
+case ${1:-} in
+    tui|--tui|-t) tui ;;
+    gui|--gui) gui ;;
+    -h|--help|help) sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//' ;;
+    "") if [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] && command -v grim-settings >/dev/null && python3 -c 'import gi' 2>/dev/null; then gui; else tui; fi ;;
+    *) echo "grimsettings: unknown option '$1' (try: grimsettings tui)"; exit 1 ;;
+esac

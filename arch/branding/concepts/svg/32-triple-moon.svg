@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" color="#0a0a0a" style="--bg:#f2f2f2"><path d="M52 64 A36 36 0 1 0 52 136 A26 36 0 1 1 52 64 Z" fill="currentColor"/>
+<path d="M148 64 A36 36 0 1 1 148 136 A26 36 0 1 0 148 64 Z" fill="currentColor"/>
+<defs><mask id="tm"><rect width="200" height="200" fill="#fff"/><path d="M100 76 C88 80 82 94 82 108 V136 H118 V108 C118 94 112 80 100 76 Z" fill="#000"/></mask></defs>
+<circle mask="url(#tm)" cx="100" cy="100" r="36" fill="currentColor"/></svg>

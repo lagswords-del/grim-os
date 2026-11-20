@@ -1,0 +1,55 @@
+BOOTLOADER: GRUB OR LIMINE
+
+The installer lets you pick one (Limine needs UEFI).
+
+GRUB
+  Settings: /etc/default/grub, then run
+    sudo grub-mkconfig -o /boot/grub/grub.cfg
+  Finds Windows and other systems on its own.
+
+Limine
+  Settings: /boot/limine.conf (just edit it, no command needed)
+  Kernels are on the EFI partition at /boot.
+  The Limine program on the EFI partition is refreshed automatically
+  when the limine package updates.
+
+Booting from USB or Ventoy: the Grim OS ISO starts on both BIOS and
+UEFI computers. Copy the .iso onto a Ventoy stick, or write it with
+  sudo dd if=grimos.iso of=/dev/sdX bs=4M status=progress oflag=sync
+(check sdX with lsblk first: everything on it is erased).
+
+KERNELS
+The installer asks which Linux kernel to use:
+  Linux       the latest stable kernel, the usual choice
+  Linux Zen   tuned for a snappy desktop and games
+  Linux LTS   long-term support: fewer changes, most stable
+All three are on the USB, so offline installs can use any of them.
+Add another one later (both show up in the boot menu with GRUB):
+  sudo pacman -S linux-lts linux-lts-headers
+With Limine, the boot entry points at the kernel you picked at install.
+
+LINUX GRIM
+Grim OS's own kernel, on the full USB: Arch's kernel plus the BORE
+scheduler (keeps the desktop responsive while something heavy runs),
+huge pages only when an app asks (less memory bloat), no zswap (Grim
+uses zram) and smaller per-CPU tables. It isn't in Arch's repositories,
+so 'update' doesn't upgrade it; a newer Grim OS USB brings a newer one.
+
+GRIM LITE
+The small USB (about 1.2 GB): it installs over the internet, so
+everything arrives fresh. It suggests linux-lts, but any desktop and
+kernel can be picked. For installs with no internet, use the full
+Grim OS USB.
+
+LOW-RAM MODE (NO DESKTOP)
+  Pick "Grim OS - Low RAM, no desktop" in the boot menu (on the USB too).
+  Grim OS starts a text console and nothing else: no desktop, no login screen,
+  no network, no Bluetooth, no background services. Good for old PCs, servers,
+  or running one heavy program.
+    grimmode                 show RAM use and the biggest programs
+    grimmode net             turn on the network (Wi-Fi: nmtui)
+    grimmode desktop         start everything again
+    grimmode lowram          switch to low-RAM mode now (closes the desktop)
+    grimmode boot lowram     always start in low-RAM mode
+    grimmode boot desktop    back to normal
+  The same switch is in Grim Settings > About.

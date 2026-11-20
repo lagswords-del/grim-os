@@ -1,0 +1,8 @@
+#!/bin/sh
+# grim-apps: the app finder (Super+Space). Pressing it again closes it.
+# On X11 it waits a moment so the shortcut keys are let go first: otherwise
+# the window manager (IceWM's Super key in particular) still holds the keyboard
+# and rofi fails with "can't grab keyboard".
+pkill -x rofi && exit 0
+[ -z "$WAYLAND_DISPLAY" ] && sleep 0.25
+exec rofi -show drun

@@ -1,0 +1,16 @@
+# Grim OS: say when a reboot is needed (new kernel, drivers or systemd)
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = linux
+Target = linux-lts
+Target = linux-zen
+Target = nvidia*
+Target = mesa
+Target = systemd
+Target = glibc
+
+[Action]
+Description = Checking whether a reboot is needed...
+When = PostTransaction
+Exec = /bin/sh -c 'touch /run/grim-reboot-needed; echo "   Reboot when you can to start using the new kernel and drivers."'

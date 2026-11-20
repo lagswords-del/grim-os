@@ -1,0 +1,11 @@
+# Grim OS: point out packages nothing needs any more
+[Trigger]
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = *
+
+[Action]
+Description = Looking for packages nothing needs...
+When = PostTransaction
+Exec = /bin/sh -c 'o=$(pacman -Qtdq 2>/dev/null | tr "\n" " "); [ -n "$o" ] && echo "   Not needed any more: $o" && echo "   Remove them with:  sudo pacman -Rns \$(pacman -Qtdq)"; true'

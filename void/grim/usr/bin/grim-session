@@ -1,0 +1,53 @@
+#!/bin/bash
+# grim-session [DESKTOP]: starts a desktop from the console.
+# With no name it uses "desktop" from /etc/grim/system.conf; "ask" shows a numbered list.
+R=$'\e[31m' B=$'\e[1;97m' N=$'\e[0m'
+SHARE=/usr/share/grim/desktops
+declare -A BIN=([icewm]=icewm [niri]=niri [openbox]=openbox [i3]=i3 [dwm]=dwm [river]=river)
+declare -A NAME=([icewm]="IceWM" [niri]="Niri" [openbox]="Openbox" [i3]="i3" [dwm]="dwm" [river]="river")
+ORDER=(icewm niri openbox i3 dwm river)
+
+installed=(); for d in "${ORDER[@]}"; do command -v "${BIN[$d]}" >/dev/null && installed+=("$d"); done
+pick=${1:-$(grimctl get desktop 2>/dev/null)}
+[[ -z $pick ]] && pick=ask
+[[ $pick == none ]] && exit 0
+if [[ $pick == ask || -z ${BIN[$pick]:-} ]] || ! command -v "${BIN[$pick]}" >/dev/null; then
+    ((${#installed[@]})) || { echo "No desktop is installed. Add one with: grimctl install icewm"; exit 0; }
+    printf '\n%sStart a desktop%s\n' "$B" "$N"
+    for i in "${!installed[@]}"; do printf '  %s%d%s  %s\n' "$R" $((i + 1)) "$N" "${NAME[${installed[$i]}]}"; done
+    printf '  %s0%s  stay in the terminal\n' "$R" "$N"
+    read -rp "Pick a number: " n
+    [[ $n =~ ^[0-9]+$ ]] && ((n >= 1 && n <= ${#installed[@]})) || exit 0
+    pick=${installed[$((n - 1))]}
+fi
+
+# first start: copy Grim's config for this desktop (never overwrites yours)
+cfg=${XDG_CONFIG_HOME:-$HOME/.config}
+seed() { [[ -e $2 ]] || { mkdir -p "$(dirname "$2")"; cp -r "$1" "$2"; }; }
+seed "$SHARE/common/alacritty.toml" "$cfg/alacritty/alacritty.toml"
+seed "$SHARE/common/dunstrc" "$cfg/dunst/dunstrc"
+seed "$SHARE/common/rofi.rasi" "$cfg/rofi/config.rasi"
+case $pick in
+    icewm)   seed "$SHARE/icewm" "$HOME/.icewm" ;;
+    openbox) if [[ ! -e $cfg/openbox/rc.xml ]]; then
+                 mkdir -p "$cfg/openbox"; cp /etc/xdg/openbox/rc.xml /etc/xdg/openbox/menu.xml "$cfg/openbox/"
+                 sed -i "/<keyboard>/r $SHARE/openbox/grim-keys.xml" "$cfg/openbox/rc.xml"
+             fi
+             seed "$SHARE/openbox/autostart" "$cfg/openbox/autostart" ;;
+    i3)      seed "$SHARE/i3/config" "$cfg/i3/config"; seed "$SHARE/i3/i3status.conf" "$cfg/i3status/config" ;;
+    niri)    seed "$SHARE/niri/config.kdl" "$cfg/niri/config.kdl" ;;
+    river)   seed "$SHARE/river/init" "$cfg/river/init"; chmod +x "$cfg/river/init" ;;
+esac
+case $pick in niri|river)
+    seed "$SHARE/common/waybar-$pick.jsonc" "$cfg/waybar/config.jsonc"
+    seed "$SHARE/common/waybar.css" "$cfg/waybar/style.css"
+    seed "$SHARE/common/mako" "$cfg/mako/config"
+    seed "$SHARE/common/fuzzel.ini" "$cfg/fuzzel/fuzzel.ini" ;;
+esac
+
+export XDG_CURRENT_DESKTOP=$pick GRIM_DESKTOP=$pick
+case $pick in
+    niri)  exec dbus-run-session niri --session ;;
+    river) export XDG_CURRENT_DESKTOP=river; exec dbus-run-session river ;;
+    *)     exec startx /usr/libexec/grim-xsession "$pick" -- vt"$(tty | grep -o '[0-9]*$')" -keeptty ;;
+esac

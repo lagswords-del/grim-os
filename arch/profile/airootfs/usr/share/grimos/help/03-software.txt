@@ -1,0 +1,17 @@
+INSTALLING AND REMOVING SOFTWARE
+
+Easiest: run  grimhelp  and pick "Install apps".
+
+Official packages (pacman)
+  sudo pacman -S name        install
+  sudo pacman -Rns name      remove (with its unused dependencies)
+  pacman -Ss word            search
+  pacman -Qe                 list what you installed
+
+AUR (packages made by the community)
+  grimhelp builds AUR apps for you (Vesktop, Shelly). Only install
+  AUR packages you trust: anyone can upload them.
+
+Flatpak (optional)
+  sudo pacman -S flatpak
+  flatpak install flathub <app>

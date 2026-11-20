@@ -1,0 +1,731 @@
+#!/usr/bin/env python3
+"""Grim DE Settings (grim-de-settings [page]): the settings app for the Grim desktop (niri + Grim Shell).
+Categories on the left, settings on the right. Every change goes through `grim-de set`,
+which rewrites the config and reloads niri and the shell live."""
+import json, os, shutil, subprocess, sys, threading
+from pathlib import Path
+
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
+
+GRIM_DE = os.environ.get("GRIM_DE_BIN", "grim-de")
+GRIM_SHARE = Path(os.environ.get("GRIM_SHARE", "/usr/share/grimos"))
+
+PAGES = [
+    ("themes", "Themes", "preferences-desktop-appearance-symbolic"),
+    ("windows", "Windows", "focus-windows-symbolic"),
+    ("glass", "Glass", "weather-fog-symbolic"),
+    ("wallpaper", "Wallpaper", "preferences-desktop-wallpaper-symbolic"),
+    ("bar", "Bar", "view-continuous-symbolic"),
+    ("dock", "Dock", "view-grid-symbolic"),
+    ("displays", "Displays", "video-display-symbolic"),
+    ("keybinds", "Keybinds", "input-keyboard-symbolic"),
+    ("fonts", "Fonts", "font-x-generic-symbolic"),
+    ("terminal", "Terminal", "utilities-terminal-symbolic"),
+    ("idle", "Idle & lock", "system-lock-screen-symbolic"),
+    ("about", "About", "help-about-symbolic"),
+]
+KEY_LABELS = {
+    "terminal": "Open a terminal", "launcher": "Find an app", "close": "Close the window", "float": "Toggle floating",
+    "fullscreen": "Fullscreen", "maximize": "Maximize the column", "overview": "Overview of all windows",
+    "settings": "Grim DE Settings", "lock": "Lock the screen", "power": "Power menu", "screenshot": "Screenshot (drag an area)",
+    "game_mode": "Game mode on/off", "files": "File manager", "hide": "Hide the window into the dock",
+}
+BAR_LAYOUTS = [("strip", "Full strip (Classic, Graphite Icons)"), ("floating", "Floating glass (Frost Glass)"),
+               ("pills", "Three pills (Reaper Pills, Nord Pills)"), ("island", "Island (Red Island)"),
+               ("minimal", "Minimal (CachyOS Minimal)"), ("win7", "Windows 7 taskbar (apps in the bar, no dock)")]
+DOCK_LAYOUTS = [("pill", "Floating pill"), ("outlined", "Pill with an accent outline"),
+                ("panel", "Full-width panel"), ("minimal", "Icons only, no background"), ("win7", "Windows 7 glass")]
+DOCK_POSITIONS = [("bottom", "Bottom"), ("left", "Left"), ("right", "Right"), ("top", "Top")]
+WS_STYLES = [("dots", "Dots"), ("numbers", "Numbers")]
+DOCK_ITEMS = [("apps", "Apps", "Pinned and open apps. Click an open app to hide it, click again to bring it back."),
+              ("launcher", "App finder button", "The Grim logo; opens the app finder"),
+              ("workspaces", "Workspaces", "Dots or numbers, click to switch"),
+              ("title", "Window title", "The name of the focused window"),
+              ("clock", "Clock", "The time"),
+              ("date", "Date", "Day and month"),
+              ("separator", "Separator", "A thin line"),
+              ("gap", "Gap", "Empty space"),
+              ("custom", "Your own button", "An icon that runs a command")]
+MODULES = [("workspaces", "Workspaces"), ("title", "Window title"), ("date", "Date"), ("clock", "Time"), ("tray", "App tray"),
+           ("updates", "Update notifier"),
+           ("volume", "Volume"), ("network", "Network"), ("battery", "Battery"),
+           ("notifications", "Notification centre"), ("control", "Control center"), ("power", "Power button")]
+CSS = b"""
+.swatch { min-width: 16px; min-height: 16px; border-radius: 8px; border: 1px solid alpha(currentColor, .25); }
+.thumb { border-radius: 10px; }
+.thumb-current { outline: 3px solid @accent_color; outline-offset: 2px; border-radius: 10px; }
+.inuse { font-weight: 700; color: @accent_color; }
+.big-title { font-size: 26px; font-weight: 800; }
+.navigation-sidebar row { padding: 8px 10px; }
+"""
+
+
+def de_json(*args):
+    try:
+        return json.loads(subprocess.run([GRIM_DE, *args], capture_output=True, text=True, timeout=30).stdout or "null")
+    except Exception:
+        return None
+
+
+def font_families(mono=False):
+    try:
+        out = subprocess.run(["fc-list", ":spacing=mono" if mono else ":", "family"], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return []
+    fams = sorted({l.split(",")[0].strip() for l in out.splitlines() if l.strip()})
+    if mono:
+        nerd = [f for f in fams if "Nerd Font Mono" in f]
+        return nerd or fams
+    return [f for f in fams if "Nerd Font" not in f] or fams
+
+
+def rgba(hexc):
+    c = Gdk.RGBA(); c.parse(hexc or "#888888"); return c
+
+
+def to_hex(c):
+    return "#%02x%02x%02x" % (round(c.red * 255), round(c.green * 255), round(c.blue * 255))
+
+
+
+# ---------------------------------------------------------------- grimfetch colours (shared with Grim DE Settings)
+FETCH_NAMED = {"black": "#2e3440", "red": "#e06c75", "green": "#98c379", "yellow": "#e5c07b", "blue": "#61afef",
+               "magenta": "#c678dd", "cyan": "#56b6c2", "white": "#e5e9f0", "default": "#d8dee9"}
+FETCH_KEYS = [("title_color", "Main words", "OS, Kernel, Memory... and your user@host"),
+              ("text_color", "Values", "What comes after each word"),
+              ("ascii_color", "Logo", "The reaper on the left")]
+
+
+def fetch_colour_rows(group, notify):
+    """One colour picker per grimfetch colour, plus a reset button. Saved through grimfetch-config."""
+    def current(key):
+        try:
+            v = subprocess.run(["grimfetch-config", "get", key], capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception:
+            v = ""
+        v = v.lower()
+        return FETCH_NAMED.get(v.replace("bright_", ""), v if v.startswith("#") else "#d8dee9")
+
+    for key, title, sub in FETCH_KEYS:
+        row = Adw.ActionRow(title=title, subtitle=sub)
+        c = Gdk.RGBA(); c.parse(current(key))
+        btn = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=False), rgba=c, valign=Gtk.Align.CENTER)
+
+        def picked(b, _p, key=key, title=title):
+            r = b.get_rgba()
+            hexv = "#%02x%02x%02x" % (round(r.red * 255), round(r.green * 255), round(r.blue * 255))
+            subprocess.run(["grimfetch-config", "set", key, hexv])
+            notify(f"grimfetch: {title.lower()} colour changed")
+        hid = btn.connect("notify::rgba", picked)
+        reset = Gtk.Button(icon_name="edit-undo-symbolic", valign=Gtk.Align.CENTER, css_classes=["flat"], tooltip_text="Back to the default")
+
+        def do_reset(_b, key=key, btn=btn, hid=hid, title=title):
+            subprocess.run(["grimfetch-config", "reset", key])
+            c = Gdk.RGBA(); c.parse(current(key))
+            btn.handler_block(hid); btn.set_rgba(c); btn.handler_unblock(hid)
+            notify(f"grimfetch: {title.lower()} colour reset")
+        reset.connect("clicked", do_reset)
+        row.add_suffix(reset); row.add_suffix(btn); group.add(row)
+    try_row = Adw.ButtonRow(title="Show grimfetch in a terminal")
+    try_row.connect("activated", lambda *_: subprocess.Popen(["sh", "-c", "grim-term -e sh -c 'grimfetch; printf \"\\nPress Enter to close. \"; read x' || grim-de term -e sh -c 'grimfetch; read x'"]))
+    group.add(try_row)
+
+class Window(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="Grim DE Settings")
+        self.set_default_size(1000, 700)
+        self.s = de_json("get") or {}
+        self.pal = de_json("palette") or {}
+        self.pending = {}
+        self.toast = Adw.ToastOverlay()
+
+        self.sidebar = Gtk.ListBox(css_classes=["navigation-sidebar"])
+        for pid, title, icon in PAGES:
+            row = Gtk.ListBoxRow(name=pid)
+            box = Gtk.Box(spacing=12)
+            box.append(Gtk.Image(icon_name=icon)); box.append(Gtk.Label(label=title, xalign=0))
+            row.set_child(box); self.sidebar.append(row)
+        self.sidebar.connect("row-activated", lambda _l, r: (self.show(r.get_name()), self.split.set_show_content(True)))
+        side = Adw.ToolbarView(); side.add_top_bar(Adw.HeaderBar())
+        side.set_content(Gtk.ScrolledWindow(child=self.sidebar, vexpand=True))
+
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        self.content = Adw.NavigationPage(title="Themes")
+        cv = Adw.ToolbarView(); cv.add_top_bar(Adw.HeaderBar()); cv.set_content(self.stack); self.content.set_child(cv)
+        self.split = Adw.NavigationSplitView(sidebar=Adw.NavigationPage(title="Grim DE Settings", child=side),
+                                             content=self.content, min_sidebar_width=210, max_sidebar_width=250)
+        self.toast.set_child(self.split); self.set_content(self.toast)
+        bp = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 640sp"))
+        bp.add_setter(self.split, "collapsed", True); self.add_breakpoint(bp)
+
+        self.built = {}
+        ids = [p[0] for p in PAGES]
+        start = app.start_page if app.start_page in ids else "themes"
+        self.show(start); self.sidebar.select_row(self.sidebar.get_row_at_index(ids.index(start)))
+
+    # ---------------------------------------------------------------- plumbing
+    def show(self, pid, rebuild=False):
+        if rebuild and pid in self.built:
+            self.stack.remove(self.built.pop(pid))
+        if pid not in self.built:
+            w = getattr(self, "page_" + pid)()
+            sw = w if isinstance(w, Adw.PreferencesPage) else Gtk.ScrolledWindow(child=w)
+            self.built[pid] = sw; self.stack.add_named(sw, pid)
+        self.stack.set_visible_child_name(pid)
+        self.content.set_title(dict((p[0], p[1]) for p in PAGES)[pid])
+
+    def refresh(self, *pids):
+        self.s = de_json("get") or self.s
+        self.pal = de_json("palette") or self.pal
+        cur = self.stack.get_visible_child_name()
+        for pid in pids:
+            if pid in self.built and pid != cur:
+                self.stack.remove(self.built.pop(pid))
+        if cur in pids:
+            self.show(cur, rebuild=True)
+
+    def set(self, key, value, msg=None, delay=0, refresh=()):
+        def go():
+            self.pending.pop(key, None)
+            def work():
+                p = subprocess.run([GRIM_DE, "set", key, json.dumps(value)], capture_output=True, text=True, timeout=60)
+                GLib.idle_add(self.after, msg if p.returncode == 0 else (p.stderr.strip().splitlines() or ["Could not save"])[-1], refresh)
+            threading.Thread(target=work, daemon=True).start()
+            return False
+        # keep our copy current so other rows see the new value straight away
+        d = self.s
+        parts = key.split(".")
+        for p in parts[:-1]:
+            d = d.setdefault(p, {})
+        d[parts[-1]] = value
+        old = self.pending.pop(key, None)
+        if old:
+            GLib.source_remove(old)
+        self.pending[key] = GLib.timeout_add(delay or 1, go)
+
+    def after(self, msg, refresh):
+        if msg:
+            self.toast.add_toast(Adw.Toast(title=msg, timeout=2))
+        if refresh:
+            self.refresh(*refresh)
+        return False
+
+    def run(self, *cmd):
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+    # small row helpers
+    def switch(self, title, key, value, subtitle=None, msg="Saved"):
+        r = Adw.SwitchRow(title=title, active=bool(value))
+        if subtitle: r.set_subtitle(subtitle)
+        r.connect("notify::active", lambda w, _p: self.set(key, w.get_active(), msg))
+        return r
+
+    def spin(self, title, key, value, lo, hi, step=1, digits=0, subtitle=None, scale=1.0, msg="Saved"):
+        r = Adw.SpinRow(title=title, adjustment=Gtk.Adjustment(value=value * scale, lower=lo, upper=hi, step_increment=step), digits=digits)
+        if subtitle: r.set_subtitle(subtitle)
+        def changed(w, _p):
+            v = w.get_value() / scale
+            self.set(key, int(round(v)) if digits == 0 else round(v, 3), msg, delay=500)
+        r.connect("notify::value", changed)
+        return r
+
+    def slider(self, title, key, value, lo, hi, step, fmt="{:.0f}%", scale=100, subtitle=None, msg="Saved"):
+        row = Adw.ActionRow(title=title)
+        if subtitle: row.set_subtitle(subtitle)
+        lab = Gtk.Label(label=fmt.format(value * scale), width_chars=5, css_classes=["dim-label", "numeric"])
+        sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, step)
+        sc.set_value(value * scale); sc.set_size_request(240, -1); sc.set_draw_value(False); sc.set_valign(Gtk.Align.CENTER)
+        def moved(w):
+            lab.set_label(fmt.format(w.get_value()))
+            self.set(key, round(w.get_value() / scale, 3), msg, delay=350)
+        sc.connect("value-changed", moved)
+        row.add_suffix(sc); row.add_suffix(lab)
+        return row
+
+    def combo(self, title, key, value, options, msg="Saved"):
+        ids = [o[0] for o in options]
+        r = Adw.ComboRow(title=title, model=Gtk.StringList.new([o[1] for o in options]))
+        r.set_selected(ids.index(value) if value in ids else 0)
+        r.connect("notify::selected", lambda w, _p: self.set(key, ids[w.get_selected()], msg))
+        return r
+
+    def colour(self, title, key, value, subtitle=None, msg="Colour changed", theme_key=None):
+        shown = value or self.pal.get(theme_key or "", "#888888")
+        row = Adw.ActionRow(title=title, subtitle=subtitle or (value or f"{shown} · from the theme"))
+        btn = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=False), rgba=rgba(shown), valign=Gtk.Align.CENTER)
+        def changed(b, _p):
+            h = to_hex(b.get_rgba()); row.set_subtitle(h); self.set(key, h, msg, delay=500)
+        btn.connect("notify::rgba", changed)
+        row.add_suffix(btn); row.set_activatable_widget(btn)
+        return row
+
+    def group(self, page, title, desc=None):
+        g = Adw.PreferencesGroup(title=title)
+        if desc: g.set_description(desc)
+        page.add(g); return g
+
+    # ---------------------------------------------------------------- Themes
+    def page_themes(self):
+        page = Adw.PreferencesPage()
+        g = self.group(page, "Theme", "Colours for the outlines, bar, dock, terminal, app finder, notifications and lock screen.")
+        themes = de_json("themes") or {}
+        cur = self.s.get("theme")
+        first = None
+        for tid, t in themes.items():
+            row = Adw.ActionRow(title=t["name"], subtitle="dark" if t.get("dark", True) else "light", activatable=True)
+            chk = Gtk.CheckButton(active=tid == cur, valign=Gtk.Align.CENTER)
+            if first: chk.set_group(first)
+            else: first = chk
+            chk.connect("toggled", lambda c, tid=tid, n=t["name"]: c.get_active() and self.set("theme", tid, f"Theme: {n}", refresh=["windows", "themes"]))
+            row.add_prefix(chk); row.set_activatable_widget(chk)
+            dots = Gtk.Box(spacing=4, valign=Gtk.Align.CENTER)
+            for k in ("bg", "bg2", "fg", "accent", "accent2"):
+                dots.append(self.swatch(t["colors"].get(k, "#000")))
+            row.add_suffix(dots); g.add(row)
+        g2 = self.group(page, "Accent", "Override the theme's accent colour (bar highlights, dock dots, outlines).")
+        acc = self.colour("Accent colour", "accent", self.s.get("accent"), theme_key="accent")
+        g2.add(acc)
+        rb = Adw.ButtonRow(title="Use the theme's accent")
+        rb.connect("activated", lambda *_: self.reset("accent", "Accent reset", ["themes"]))
+        g2.add(rb)
+        return page
+
+    def reset(self, key, msg, refresh=()):
+        def work():
+            subprocess.run([GRIM_DE, "reset", key], capture_output=True, timeout=60)
+            GLib.idle_add(self.after, msg, refresh)
+        threading.Thread(target=work, daemon=True).start()
+
+    def swatch(self, colour):
+        d = Gtk.Box(css_classes=["swatch"])
+        p = Gtk.CssProvider(); p.load_from_string(f"box {{ background: {colour}; }}")
+        d.get_style_context().add_provider(p, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+        return d
+
+    # ---------------------------------------------------------------- Windows (outlines)
+    def page_windows(self):
+        page = Adw.PreferencesPage()
+        o = self.s.get("outline", {})
+        g = self.group(page, "Outline", "The line around every window. The focused window uses the active colour.")
+        g.add(self.spin("Thickness", "outline.width", o.get("width", 2), 0, 12, subtitle="Pixels. 0 turns outlines off", msg="Outline thickness changed"))
+        g.add(self.colour("Active colour", "outline.active", o.get("active"), msg="Outline colour changed", theme_key="border_active"))
+        grad = Adw.SwitchRow(title="Gradient", subtitle="Fade the active outline into a second colour", active=bool(o.get("active2")))
+        g.add(grad)
+        c2 = self.colour("Second colour", "outline.active2", o.get("active2"), msg="Gradient changed", theme_key="accent2")
+        c2.set_sensitive(bool(o.get("active2")))
+        def gtoggle(w, _p):
+            c2.set_sensitive(w.get_active())
+            if w.get_active():
+                self.set("outline.active2", self.s.get("outline", {}).get("active2") or "#b48ead", "Gradient on")
+            else:
+                self.reset("outline.active2", "Gradient off")
+        grad.connect("notify::active", gtoggle)
+        g.add(c2)
+        g.add(self.colour("Inactive colour", "outline.inactive", o.get("inactive"), msg="Outline colour changed", theme_key="border_inactive"))
+        g2 = self.group(page, "Shape and spacing")
+        g2.add(self.spin("Corner rounding", "outline.radius", o.get("radius", 10), 0, 30, subtitle="Pixels"))
+        g2.add(self.spin("Gaps between windows", "gaps", self.s.get("gaps", 12), 0, 48, subtitle="Pixels"))
+        g2.add(self.switch("Shadows", "glass.shadows", self.s.get("glass", {}).get("shadows", True)))
+        g3 = self.group(page, "Windows 7 style", "A try at Windows 7's look. niri windows have no title bars, so this is the frames, taskbar and dock.")
+        w7 = Adw.SwitchRow(title="Windows 7 window frames", subtitle="Wide frosted light-blue frames with rounded top corners",
+                           active=o.get("style") == "win7")
+        w7.connect("notify::active", lambda w, _p: self.set("outline.style", "win7" if w.get_active() else "normal",
+                                                             "Windows 7 frames on" if w.get_active() else "Windows 7 frames off"))
+        g3.add(w7)
+        whole = Adw.ButtonRow(title="Use the whole Windows 7 look", start_icon_name="starred-symbolic")
+        whole.connect("activated", lambda *_: self.set_many([("outline.style", "win7"), ("bar.layout", "win7"), ("dock.layout", "win7")],
+                                                            "Windows 7 look on", refresh=["windows", "bar", "dock"]))
+        g3.add(whole)
+        undo = Adw.ButtonRow(title="Back to the Grim look")
+        undo.connect("activated", lambda *_: self.set_many([("outline.style", "normal"), ("bar.layout", "strip"), ("dock.layout", "pill")],
+                                                           "Grim look back", refresh=["windows", "bar", "dock"]))
+        g3.add(undo)
+        return page
+
+    def set_many(self, pairs, msg, refresh=()):
+        """Several settings in a row, one after another (they all rewrite settings.json)."""
+        for key, value in pairs:
+            cur = self.s
+            parts = key.split(".")
+            for k in parts[:-1]:
+                cur = cur.setdefault(k, {})
+            cur[parts[-1]] = value
+        def work():
+            ok = True
+            for key, value in pairs:
+                ok = subprocess.run([GRIM_DE, "set", key, json.dumps(value)], capture_output=True, timeout=60).returncode == 0 and ok
+            GLib.idle_add(self.after, msg if ok else "Could not save everything", refresh)
+        threading.Thread(target=work, daemon=True).start()
+
+    # ---------------------------------------------------------------- Glass
+    def page_glass(self):
+        page = Adw.PreferencesPage()
+        gl = self.s.get("glass", {})
+        g = self.group(page, "Glassy transparency", "Blur behind see-through windows, the bar and the dock. Games are always solid.")
+        g.add(self.switch("Glass", "glass.enabled", gl.get("enabled", True), msg="Glass changed"))
+        g.add(self.slider("Blur strength", "glass.blur_passes", gl.get("blur_passes", 3), 1, 6, 1, "{:.0f}", 1, "How many blur passes"))
+        g.add(self.slider("Blur spread", "glass.blur_offset", gl.get("blur_offset", 3.0), 1, 8, 0.5, "{:.1f}", 1))
+        g.add(self.slider("Frost grain", "glass.noise", gl.get("noise", 0.02), 0, 10, 1, "{:.0f}%", 100))
+        g.add(self.slider("Colour boost", "glass.saturation", gl.get("saturation", 1.2), 50, 200, 5, "{:.0f}%", 100))
+        g.add(self.slider("Unfocused windows", "glass.inactive_opacity", gl.get("inactive_opacity", 0.94), 40, 100, 1, subtitle="Opacity of windows you're not using"))
+        g.add(self.slider("Bar and dock", "glass.panel_opacity", gl.get("panel_opacity", 0.72), 20, 100, 1, subtitle="Opacity of the bar and dock"))
+        game = self.switch("Game mode", "game_mode", self.s.get("game_mode", False), "Turns off blur, transparency and animations (Super+G)", "Game mode changed")
+        g.add(game)
+
+        g2 = self.group(page, "Per-app transparency", "Each app's opacity when focused and when in the background.")
+        for i, a in enumerate(self.s.get("apps", [])):
+            exp = Adw.ExpanderRow(title=a.get("name") or a["app_id"], subtitle=a["app_id"])
+            exp.add_row(self.app_slider(i, "Focused", "opacity", a.get("opacity", 1)))
+            exp.add_row(self.app_slider(i, "In the background", "inactive", a.get("inactive", a.get("opacity", 1))))
+            rm = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER, css_classes=["flat"], tooltip_text="Remove")
+            rm.connect("clicked", lambda _b, i=i: self.app_remove(i))
+            exp.add_suffix(rm)
+            g2.add(exp)
+        add = Adw.ComboRow(title="Add an open app", subtitle="Pick a window that's open right now")
+        wins = de_json("windows") or []
+        have = {a["app_id"] for a in self.s.get("apps", [])}
+        choices = [w for w in wins if w["app_id"] not in have]
+        add.set_model(Gtk.StringList.new(["Choose…"] + [w["app_id"] for w in choices]))
+        add.connect("notify::selected", lambda w, _p: w.get_selected() > 0 and self.app_add(choices[w.get_selected() - 1]["app_id"]))
+        g2.add(add)
+        manual = Adw.EntryRow(title="Or type an app id", show_apply_button=True)
+        manual.connect("apply", lambda r: r.get_text().strip() and self.app_add(r.get_text().strip()))
+        g2.add(manual)
+        return page
+
+    def app_slider(self, i, title, field, value):
+        row = Adw.ActionRow(title=title)
+        lab = Gtk.Label(label=f"{value * 100:.0f}%", width_chars=5, css_classes=["dim-label"])
+        sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 30, 100, 1)
+        sc.set_value(value * 100); sc.set_size_request(240, -1); sc.set_valign(Gtk.Align.CENTER)
+        def moved(w):
+            lab.set_label(f"{w.get_value():.0f}%")
+            apps = [dict(x) for x in self.s.get("apps", [])]
+            apps[i][field] = round(w.get_value() / 100, 2)
+            self.set("apps", apps, "Transparency changed", delay=350)
+        sc.connect("value-changed", moved)
+        row.add_suffix(sc); row.add_suffix(lab)
+        return row
+
+    def app_add(self, app_id):
+        apps = [dict(x) for x in self.s.get("apps", [])]
+        apps.append({"app_id": app_id, "name": app_id.split(".")[-1], "opacity": 0.9, "inactive": 0.82})
+        self.set("apps", apps, f"Added {app_id}", refresh=["glass"])
+
+    def app_remove(self, i):
+        apps = [dict(x) for x in self.s.get("apps", [])]
+        gone = apps.pop(i)
+        self.set("apps", apps, f"Removed {gone['app_id']}", refresh=["glass"])
+
+    # ---------------------------------------------------------------- Wallpaper
+    def page_wallpaper(self):
+        page = Adw.PreferencesPage()
+        cur = self.s.get("wallpaper", "")
+        g = self.group(page, "Wallpaper", "From Grim OS, ~/Pictures/Wallpapers and ~/Pictures.")
+        add = Gtk.Button(label="Add a picture…", valign=Gtk.Align.CENTER); add.connect("clicked", self.add_wallpaper)
+        g.set_header_suffix(add)
+        flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4, min_children_per_line=2,
+                           column_spacing=12, row_spacing=12, homogeneous=True)
+        for path in de_json("wallpapers") or []:
+            pic = Gtk.Picture.new_for_filename(path); pic.set_content_fit(Gtk.ContentFit.COVER)
+            pic.set_size_request(190, 108); pic.add_css_class("thumb")
+            if path == cur: pic.add_css_class("thumb-current")
+            b = Gtk.Button(child=pic, css_classes=["flat"], tooltip_text=Path(path).name)
+            b.connect("clicked", lambda _b, p=path: self.set("wallpaper", p, "Wallpaper changed", refresh=["wallpaper"]))
+            flow.append(b)
+        g.add(flow)
+        g2 = self.group(page, "Fit")
+        g2.add(self.combo("How it fits the screen", "wallpaper_mode", self.s.get("wallpaper_mode", "fill"),
+                          [("fill", "Fill (crop)"), ("fit", "Fit (whole picture)"), ("center", "Centre"), ("tile", "Tile")], "Wallpaper fit changed"))
+        return page
+
+    def add_wallpaper(self, _b):
+        dlg = Gtk.FileDialog(title="Pick a wallpaper")
+        f = Gtk.FileFilter(); f.set_name("Pictures"); [f.add_suffix(x) for x in ("jpg", "jpeg", "png", "webp")]
+        fl = Gio.ListStore.new(Gtk.FileFilter); fl.append(f); dlg.set_filters(fl)
+        def picked(d, res):
+            try:
+                src = d.open_finish(res).get_path()
+            except GLib.Error:
+                return
+            dest = Path.home() / "Pictures/Wallpapers"; dest.mkdir(parents=True, exist_ok=True)
+            tgt = dest / Path(src).name
+            if Path(src) != tgt: shutil.copy2(src, tgt)
+            self.set("wallpaper", str(tgt), "Wallpaper added", refresh=["wallpaper"])
+        dlg.open(self, None, picked)
+
+    # ---------------------------------------------------------------- Bar / Dock
+    def page_bar(self):
+        page = Adw.PreferencesPage()
+        b = self.s.get("bar", {})
+        g = self.group(page, "Bar")
+        g.add(self.switch("Show the bar", "bar.enabled", b.get("enabled", True)))
+        g.add(self.combo("Layout", "bar.layout", b.get("layout", "strip"), BAR_LAYOUTS, "Bar layout changed"))
+        g.add(self.combo("Workspace markers", "workspace_style", self.s.get("workspace_style", "dots"), WS_STYLES, "Workspaces changed"))
+        g.add(self.combo("Position", "bar.position", b.get("position", "top"), [("top", "Top"), ("bottom", "Bottom")], "Bar moved"))
+        g.add(self.spin("Height", "bar.height", b.get("height", 32), 22, 52, subtitle="Pixels"))
+        g.add(self.switch("24-hour clock", "bar.clock24", b.get("clock24", True)))
+        g2 = self.group(page, "Show on the bar")
+        mods = list(b.get("modules", []))
+        for mid, name in MODULES:
+            sw = Adw.SwitchRow(title=name, active=mid in mods)
+            def t(w, _p, mid=mid):
+                cur = list(self.s.get("bar", {}).get("modules", []))
+                if w.get_active() and mid not in cur: cur.append(mid)
+                if not w.get_active() and mid in cur: cur.remove(mid)
+                self.set("bar.modules", [m for m, _ in MODULES if m in cur], "Bar updated", delay=300)
+            sw.connect("notify::active", t); g2.add(sw)
+        return page
+
+    def page_dock(self):
+        page = Adw.PreferencesPage()
+        d = self.s.get("dock", {})
+        g = self.group(page, "Dock")
+        g.add(self.switch("Show the dock", "dock.enabled", d.get("enabled", True)))
+        g.add(self.combo("Style", "dock.layout", d.get("layout", "pill"), DOCK_LAYOUTS, "Dock style changed"))
+        g.add(self.combo("Position", "dock.position", d.get("position", "bottom"), DOCK_POSITIONS, "Dock moved"))
+        g.add(self.combo("Workspace markers", "workspace_style", self.s.get("workspace_style", "dots"), WS_STYLES, "Workspaces changed"))
+        if self.s.get("bar", {}).get("layout") == "win7":
+            g.add(Adw.ActionRow(title="Hidden while the bar uses the Windows 7 taskbar", subtitle="The taskbar holds your apps. Pick another bar layout to get the dock back."))
+        self.dock_builder(page, d)
+        g.add(self.spin("Icon size", "dock.size", d.get("size", 44), 24, 80, 2, subtitle="Pixels"))
+        g.add(self.switch("Hide until the mouse touches the bottom", "dock.autohide", d.get("autohide", False)))
+        g2 = self.group(page, "Pinned apps", "Always shown in the dock, in this order. Open apps appear after them.")
+        pinned = list(d.get("pinned", []))
+        for i, pid in enumerate(pinned):
+            row = Adw.ActionRow(title=pid)
+            for icon, delta, tip in (("go-up-symbolic", -1, "Move left"), ("go-down-symbolic", 1, "Move right")):
+                b = Gtk.Button(icon_name=icon, valign=Gtk.Align.CENTER, css_classes=["flat"], tooltip_text=tip, sensitive=0 <= i + delta < len(pinned))
+                b.connect("clicked", lambda _b, i=i, delta=delta: self.pin_move(i, delta)); row.add_suffix(b)
+            rm = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER, css_classes=["flat"], tooltip_text="Unpin")
+            rm.connect("clicked", lambda _b, i=i: self.pin_set([p for j, p in enumerate(self.s["dock"]["pinned"]) if j != i], "Unpinned"))
+            row.add_suffix(rm); g2.add(row)
+        add = Adw.EntryRow(title="Pin an app (its desktop id, e.g. firefox, discord, steam)", show_apply_button=True)
+        add.connect("apply", lambda r: r.get_text().strip() and self.pin_set(self.s["dock"]["pinned"] + [r.get_text().strip()], "Pinned"))
+        g2.add(add)
+        return page
+
+    # ---------------------------------------------------------------- dock builder
+    def dock_builder(self, page, d):
+        items = [dict(i) for i in (d.get("items") or [{"type": "apps"}])]
+        labels = {t: (n, sub) for t, n, sub in DOCK_ITEMS}
+        g = self.group(page, "What's in the dock",
+                       "In order from the start of the dock. \"Own pill\" draws a pill around that item; with the "
+                       "\"Icons only\" style that gives you separate pills.")
+
+        def save(new, msg):
+            self.set("dock.items", new, msg, refresh=["dock"])
+
+        for i, it in enumerate(items):
+            name, sub = labels.get(it.get("type"), (it.get("type", "?"), ""))
+            if it.get("type") == "custom":
+                row = Adw.ExpanderRow(title=it.get("name") or "Your own button", subtitle=it.get("command") or "Set a command")
+                for field, title in (("name", "Name"), ("icon", "Icon (a name like firefox, or a file path)"), ("command", "Command")):
+                    e = Adw.EntryRow(title=title, text=it.get(field, ""), show_apply_button=True)
+                    def applied(r, i=i, field=field):
+                        new = [dict(x) for x in items]; new[i][field] = r.get_text().strip(); save(new, "Button saved")
+                    e.connect("apply", applied); row.add_row(e)
+            else:
+                row = Adw.ActionRow(title=name, subtitle=sub)
+            pill = Gtk.Switch(active=bool(it.get("pill")), valign=Gtk.Align.CENTER, tooltip_text="Own pill")
+            def pill_t(w, _p, i=i):
+                new = [dict(x) for x in items]; new[i]["pill"] = w.get_active(); save(new, "Pill on" if w.get_active() else "Pill off")
+            pill.connect("notify::active", pill_t)
+            lab = Gtk.Label(label="Own pill", css_classes=["dim-label"])
+            add = row.add_suffix
+            add(lab); add(pill)
+            for icon, delta, tip in (("go-up-symbolic", -1, "Move earlier"), ("go-down-symbolic", 1, "Move later")):
+                b = Gtk.Button(icon_name=icon, valign=Gtk.Align.CENTER, css_classes=["flat"], tooltip_text=tip, sensitive=0 <= i + delta < len(items))
+                def mv(_b, i=i, delta=delta):
+                    new = [dict(x) for x in items]; new[i], new[i + delta] = new[i + delta], new[i]; save(new, "Moved")
+                b.connect("clicked", mv); add(b)
+            rm = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER, css_classes=["flat"], tooltip_text="Remove")
+            rm.connect("clicked", lambda _b, i=i: save([x for j, x in enumerate(items) if j != i] or [{"type": "apps"}], "Removed"))
+            add(rm)
+            g.add(row)
+
+        pick = Adw.ComboRow(title="Add to the dock", model=Gtk.StringList.new([n for _t, n, _s in DOCK_ITEMS]))
+        b = Gtk.Button(label="Add", valign=Gtk.Align.CENTER, css_classes=["suggested-action"])
+        def do_add(_b):
+            t = DOCK_ITEMS[pick.get_selected()][0]
+            it = {"type": t}
+            if t == "custom":
+                it.update({"name": "Terminal", "icon": "utilities-terminal", "command": "grim-de term"})
+            save(items + [it], "Added")
+        b.connect("clicked", do_add)
+        pick.add_suffix(b)
+        g.add(pick)
+        presets = Adw.ComboRow(title="Start from a ready-made dock", model=Gtk.StringList.new(
+            ["Just apps", "macOS-like: apps, separator, clock", "Taskbar: finder, workspaces, apps, gap, date, clock",
+             "Pills: finder, apps and clock each in a pill"]))
+        pb = Gtk.Button(label="Use", valign=Gtk.Align.CENTER)
+        PRESETS = [
+            [{"type": "apps"}],
+            [{"type": "apps"}, {"type": "separator"}, {"type": "clock"}],
+            [{"type": "launcher"}, {"type": "workspaces"}, {"type": "separator"}, {"type": "apps"}, {"type": "gap"}, {"type": "date"}, {"type": "clock"}],
+            [{"type": "launcher", "pill": True}, {"type": "apps", "pill": True}, {"type": "clock", "pill": True}],
+        ]
+        def use(_b):
+            p = PRESETS[presets.get_selected()]
+            if presets.get_selected() == 3:
+                self.set_many([("dock.layout", "minimal"), ("dock.items", p)], "Dock changed", refresh=["dock"])
+            else:
+                save(p, "Dock changed")
+        pb.connect("clicked", use)
+        presets.add_suffix(pb)
+        g.add(presets)
+
+    def pin_move(self, i, delta):
+        p = list(self.s["dock"]["pinned"]); p[i], p[i + delta] = p[i + delta], p[i]
+        self.pin_set(p, "Moved")
+
+    def pin_set(self, pinned, msg):
+        self.set("dock.pinned", pinned, msg, refresh=["dock"])
+
+    # ---------------------------------------------------------------- Displays
+    def page_displays(self):
+        page = Adw.PreferencesPage()
+        outs = de_json("outputs") or []
+        if not outs:
+            g = self.group(page, "Screens")
+            g.add(Adw.ActionRow(title="No screens found", subtitle="Display settings work inside a Grim DE session."))
+            return page
+        saved = self.s.get("displays") or {}
+        for o in outs:
+            g = self.group(page, o["name"], (o.get("make") or "") + " · changes ask you to confirm and go back after 15 seconds")
+            modes = o["modes"] or [o["mode"]]
+            m = Adw.ComboRow(title="Resolution and refresh rate", model=Gtk.StringList.new([x.replace("@", "  ·  ") + " Hz" for x in modes]))
+            m.set_selected(modes.index(o["mode"]) if o["mode"] in modes else 0)
+            sc = Adw.SpinRow(title="Scale", adjustment=Gtk.Adjustment(value=o.get("scale", 1), lower=0.5, upper=3, step_increment=0.25), digits=2)
+            ar = Adw.ActionRow(title="Saved for next login" if o["name"] in saved else "Not saved yet")
+            b = Gtk.Button(label="Apply", valign=Gtk.Align.CENTER, css_classes=["suggested-action"])
+            b.connect("clicked", lambda _b, o=o, m=m, sc=sc, modes=modes: self.try_display(o, modes[m.get_selected()], sc.get_value()))
+            ar.add_suffix(b)
+            for w in (m, sc, ar): g.add(w)
+        return page
+
+    def try_display(self, o, mode, scale):
+        old = (o["mode"], o.get("scale", 1))
+        subprocess.run([GRIM_DE, "output", o["name"], mode, f"{scale:.2f}"])
+        dlg = Adw.AlertDialog(heading="Keep these display settings?", body="Going back in 15 seconds.")
+        dlg.add_response("revert", "Go back"); dlg.add_response("keep", "Keep")
+        dlg.set_response_appearance("keep", Adw.ResponseAppearance.SUGGESTED)
+        left = [15]
+        def tick():
+            left[0] -= 1
+            if left[0] <= 0:
+                dlg.close(); return False
+            dlg.set_body(f"Going back in {left[0]} seconds."); return True
+        t = GLib.timeout_add_seconds(1, tick)
+        def answer(_d, resp):
+            if left[0] > 0: GLib.source_remove(t)
+            if resp == "keep":
+                d = dict(self.s.get("displays") or {}); d[o["name"]] = {"mode": mode, "scale": round(scale, 2)}
+                self.set("displays", d, "Display settings saved", refresh=["displays"])
+            else:
+                subprocess.run([GRIM_DE, "output", o["name"], old[0], f"{old[1]:.2f}"])
+                self.toast.add_toast(Adw.Toast(title="Went back to the old settings"))
+        dlg.connect("response", answer); dlg.present(self)
+
+    # ---------------------------------------------------------------- Keybinds
+    def page_keybinds(self):
+        page = Adw.PreferencesPage()
+        kb = self.s.get("keybinds", {})
+        g = self.group(page, "Keybinds", "Mod is the Super (Windows) key. Write keys like Mod+Shift+E or Print. Press Enter to save.")
+        for aid, label in KEY_LABELS.items():
+            r = Adw.EntryRow(title=label, text=kb.get(aid, ""), show_apply_button=True)
+            r.connect("apply", lambda w, aid=aid: self.save_key(aid, w.get_text().strip()))
+            g.add(r)
+        g2 = self.group(page, "Always on")
+        for k, what in (("Mod + left drag", "Move a window"), ("Mod + right drag", "Resize a window"), ("Mod + 1…9", "Go to a workspace"),
+                        ("Mod + arrows", "Move focus"), ("Mod + Shift + arrows", "Move windows"), ("Mod + Shift + /", "Show every shortcut")):
+            row = Adw.ActionRow(title=what); row.add_suffix(Gtk.Label(label=k, css_classes=["dim-label", "monospace"])); g2.add(row)
+        rb = Adw.ButtonRow(title="Reset all keybinds")
+        rb.connect("activated", lambda *_: self.reset("keybinds", "Keybinds reset", ["keybinds"]))
+        g.add(rb)
+        return page
+
+    def save_key(self, aid, combo):
+        import re
+        if combo and not re.fullmatch(r"((Mod|Super|Ctrl|Control|Alt|Shift|ISO_Level3_Shift)\+)*[A-Za-z0-9_]+", combo):
+            self.toast.add_toast(Adw.Toast(title=f"\"{combo}\" doesn't look like a key, e.g. Mod+Shift+E")); return
+        used = {k: v for k, v in self.s.get("keybinds", {}).items() if v == combo and k != aid}
+        if combo and used:
+            self.toast.add_toast(Adw.Toast(title=f"{combo} is already used for {KEY_LABELS.get(next(iter(used)), 'something else')}")); return
+        kb = dict(self.s.get("keybinds", {})); kb[aid] = combo
+        self.set("keybinds", kb, f"{KEY_LABELS[aid]}: {combo or 'no key'}")
+
+    # ---------------------------------------------------------------- Fonts / Terminal
+    def page_fonts(self):
+        page = Adw.PreferencesPage()
+        f = self.s.get("fonts", {})
+        g = self.group(page, "Interface font", "Bar, dock, notifications, app finder and lock screen.")
+        ui = font_families() or [f.get("ui", "Noto Sans")]
+        if f.get("ui") not in ui: ui.insert(0, f.get("ui"))
+        r = Adw.ComboRow(title="Font", model=Gtk.StringList.new(ui), enable_search=True); r.set_selected(ui.index(f.get("ui")))
+        r.connect("notify::selected", lambda w, _p: self.set("fonts.ui", ui[w.get_selected()], "Font changed"))
+        g.add(r); g.add(self.spin("Size", "fonts.ui_size", f.get("ui_size", 11), 7, 24))
+        g2 = self.group(page, "Terminal font", "Alacritty in Grim DE. Nerd Fonts have the bar's icons.")
+        mono = font_families(True) or [f.get("mono")]
+        if f.get("mono") not in mono: mono.insert(0, f.get("mono"))
+        m = Adw.ComboRow(title="Font", model=Gtk.StringList.new(mono), enable_search=True); m.set_selected(mono.index(f.get("mono")))
+        m.connect("notify::selected", lambda w, _p: self.set("fonts.mono", mono[w.get_selected()], "Terminal font changed"))
+        g2.add(m); g2.add(self.spin("Size", "fonts.mono_size", f.get("mono_size", 12), 7, 28))
+        return page
+
+    def page_terminal(self):
+        page = Adw.PreferencesPage()
+        t = self.s.get("terminal", {})
+        g = self.group(page, "Glassy terminal", "Alacritty's background. With blur on, niri frosts what's behind it.")
+        g.add(self.slider("Background opacity", "terminal.opacity", t.get("opacity", 0.78), 20, 100, 1))
+        g.add(self.switch("Blur behind the terminal", "terminal.blur", t.get("blur", True)))
+        g.add(self.spin("Padding", "terminal.padding", t.get("padding", 14), 0, 40, 2, subtitle="Pixels around the text"))
+        rb = Adw.ButtonRow(title="Open a terminal to try it")
+        rb.connect("activated", lambda *_: self.run(GRIM_DE, "term"))
+        g.add(rb)
+        g2 = self.group(page, "grimfetch colours", "The system info you get from grimfetch.")
+        fetch_colour_rows(g2, lambda m: self.toast.add_toast(Adw.Toast(title=m, timeout=2)))
+        return page
+
+    # ---------------------------------------------------------------- Idle & lock
+    def page_idle(self):
+        page = Adw.PreferencesPage()
+        i = self.s.get("idle", {})
+        g = self.group(page, "When you're away", "Minutes. 0 means never.")
+        for key, title in (("dim", "Dim the screen after"), ("lock", "Lock after"), ("screen_off", "Turn the screen off after"), ("suspend", "Sleep after")):
+            # seconds in settings.json, minutes on screen
+            g.add(self.spin(title, f"idle.{key}", i.get(key, 0) or 0, 0, 240, 1, subtitle="minutes", scale=1 / 60, msg="Idle times changed"))
+        g.add(self.switch("Lock before sleeping", "idle.lock_on_suspend", i.get("lock_on_suspend", True)))
+        rb = Adw.ButtonRow(title="Lock now")
+        rb.connect("activated", lambda *_: self.run(GRIM_DE, "lock"))
+        g.add(rb)
+        return page
+
+    # ---------------------------------------------------------------- About
+    def page_about(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER, margin_top=40)
+        logo = Gtk.Picture.new_for_filename(str(GRIM_SHARE / "logo.svg")); logo.set_size_request(140, 140); box.append(logo)
+        box.append(Gtk.Label(label="Grim DE", css_classes=["big-title"]))
+        box.append(Gtk.Label(label="niri + Grim Shell, part of Grim OS"))
+        box.append(Gtk.Label(label="Settings live in ~/.config/grim-de/settings.json. Your own niri additions go in ~/.config/grim-de/niri/custom.kdl.",
+                             css_classes=["dim-label"], wrap=True, max_width_chars=60, justify=Gtk.Justification.CENTER))
+        return box
+
+
+class App(Adw.Application):
+    def __init__(self, start_page=None):
+        super().__init__(application_id="os.grim.DeSettings")
+        self.start_page = start_page
+
+    def do_activate(self):
+        p = Gtk.CssProvider(); p.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), p, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        (self.props.active_window or Window(self)).present()
+
+
+if __name__ == "__main__":
+    # grim-de-settings [page]: open straight to a page, e.g. grim-de-settings glass
+    sys.exit(App(sys.argv[1] if len(sys.argv) > 1 else None).run(sys.argv[:1]))

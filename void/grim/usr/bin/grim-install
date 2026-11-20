@@ -1,0 +1,333 @@
+#!/bin/bash
+# grim-install: the Grim Void installer. Plain text and numbers, like installing Arch,
+# but every step asks you a question instead of making you type commands.
+#   grim-install             install
+#   grim-install --dry-run   ask everything and show the plan, change nothing (no root needed)
+set -uo pipefail
+
+SHARE=${GRIM_SHARE:-/usr/share/grim}
+. "$SHARE/packages.sh"
+REPO=/opt/grim/repo                 # the USB's package repository (offline installs + Grim's own packages)
+MNT=/mnt/grim
+LOG=/tmp/grim-install.log
+R=$'\e[31m' B=$'\e[1;97m' G=$'\e[90m' N=$'\e[0m'
+
+DRY=no; [[ ${1:-} == --dry-run ]] && DRY=yes
+[[ $DRY == yes ]] || ((EUID == 0)) || exec sudo "$0" "$@"
+: > "$LOG" 2>/dev/null || LOG=/dev/null
+
+# ------------------------------------------------------------------ helpers
+title() { printf '\n%s━━ %s %s%s\n\n' "$R" "$B" "$*" "$N"; }
+note()  { printf '%s%s%s\n' "$G" "$*" "$N"; }
+fail()  { printf '\n%s!! %s%s\n   The log is in %s\n' "$R" "$*" "$N" "$LOG"; exit 1; }
+step()  { printf '%s::%s %s\n' "$R" "$N" "$1"; shift; "$@" >>"$LOG" 2>&1 || fail "failed: $*"; }
+
+# choose "question" opt1 desc1 opt2 desc2 ... -> sets REPLY_VAL to the chosen opt
+choose() {
+    local q=$1; shift
+    local -a opts=() descs=()
+    while (($#)); do opts+=("$1"); descs+=("$2"); shift 2; done
+    while :; do
+        printf '%s%s%s\n' "$B" "$q" "$N"
+        for i in "${!opts[@]}"; do printf '  %s%2d%s  %s\n' "$R" $((i + 1)) "$N" "${descs[$i]}"; done
+        read -rp "> " n
+        if [[ $n =~ ^[0-9]+$ ]] && ((n >= 1 && n <= ${#opts[@]})); then REPLY_VAL=${opts[$((n - 1))]}; echo; return; fi
+        echo "Type a number from 1 to ${#opts[@]}."
+    done
+}
+
+# ask "question" default -> REPLY_VAL
+ask() {
+    local q=$1 def=${2:-}
+    read -rp "$(printf '%s%s%s%s ' "$B" "$q" "$N" "${def:+ ${G}[$def]${N}}")" REPLY_VAL
+    REPLY_VAL=${REPLY_VAL:-$def}
+}
+
+yesno() { local a; read -rp "$(printf '%s%s%s [y/n] ' "$B" "$1" "$N")" a; [[ $a == [yY]* ]]; }
+
+password() {   # password "who" -> REPLY_VAL
+    local a b
+    while :; do
+        read -rsp "$(printf '%sPassword for %s:%s ' "$B" "$1" "$N")" a; echo
+        read -rsp "$(printf '%sAgain:%s ' "$B" "$N")" b; echo
+        [[ -z $a ]] && { echo "It can't be empty."; continue; }
+        [[ $a == "$b" ]] && { REPLY_VAL=$a; return; }
+        echo "They don't match. Try again."
+    done
+}
+
+part() { [[ $1 =~ (nvme|mmcblk|loop) ]] && echo "${1}p$2" || echo "$1$2"; }
+
+# ------------------------------------------------------------------ the questions
+clear
+grimfetch --color --logo void 2>/dev/null | head -20
+printf '%sWelcome to the Grim Void %s installer.%s\n' "$B" "$GRIM_VERSION" "$N"
+note "Answer with a number and Enter. Ctrl+C stops at any time (nothing changes until the last step)."
+UEFI=no; [[ -d /sys/firmware/efi ]] && UEFI=yes
+note "This PC boots with $([[ $UEFI == yes ]] && echo UEFI || echo "BIOS (legacy)")."
+
+title "1. Offline or online install"
+choose "Offline or online install?" \
+    offline "Offline: everything from this USB (no internet needed)" \
+    online  "Online: the newest packages from the internet"
+MODE=$REPLY_VAL
+if [[ $MODE == online ]]; then
+    if ! grim-wifi --check; then
+        echo "You're not online yet. Let's find a network."
+        grim-wifi
+        grim-wifi --check || { echo "Still offline: switching to an offline install."; MODE=offline; }
+    else note "You're online."; fi
+fi
+
+title "2. Keyboard"
+choose "Keyboard layout?" us "US (us)" uk "UK (uk)" de "German (de)" fr "French (fr)" es "Spanish (es)" \
+    it "Italian (it)" se "Swedish (se)" no "Norwegian (no)" pl "Polish (pl)" br-abnt2 "Brazilian (br-abnt2)" other "Another one..."
+KEYMAP=$REPLY_VAL
+if [[ $KEYMAP == other ]]; then
+    while ask "Keymap name (like 'dvorak' or 'pt-latin1'):" us; KEYMAP=$REPLY_VAL; ! find /usr/share/kbd/keymaps -name "$KEYMAP.map*" | grep -q .; do echo "No keymap called $KEYMAP."; done
+fi
+loadkeys "$KEYMAP" 2>/dev/null
+
+title "3. Time zone"
+while :; do
+    ask "Your time zone (like Europe/London, America/New_York, Asia/Tokyo):" "Europe/London"
+    TZONE=$REPLY_VAL
+    [[ -f /usr/share/zoneinfo/$TZONE ]] && break
+    echo "Not found. Some that match:"; (cd /usr/share/zoneinfo && find . -type f | sed 's|^\./||' | grep -i "${TZONE##*/}" | head -8)
+done
+
+title "4. Names and passwords"
+while ask "Computer name:" grimvoid; HOSTNAME_=$REPLY_VAL; [[ ! $HOSTNAME_ =~ ^[a-zA-Z0-9-]{1,63}$ ]]; do echo "Letters, numbers and - only."; done
+while ask "Your user name (lowercase):" ""; USERNAME_=$REPLY_VAL; [[ ! $USERNAME_ =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; do echo "Lowercase letters, numbers, _ and - (start with a letter)."; done
+password "$USERNAME_"; USERPASS=$REPLY_VAL
+if yesno "Use the same password for root (the admin account)?"; then ROOTPASS=$USERPASS; else password root; ROOTPASS=$REPLY_VAL; fi
+choose "Your shell?" bash "bash (the usual)" fish "fish (suggestions as you type)" zsh "zsh"
+SHELL_=$REPLY_VAL
+
+title "5. Disk"
+mapfile -t DISKS < <(lsblk -dpno NAME,SIZE,MODEL,TYPE | awk '$NF=="disk" && $1 !~ /zram|loop|sr/' | sed 's/ disk$//')
+LIVE=$(findmnt -no SOURCE /run/initramfs/live 2>/dev/null | sed -E 's/p?[0-9]+$//')
+((${#DISKS[@]})) || fail "No disks found."
+args=()
+for d in "${DISKS[@]}"; do
+    dev=${d%% *}
+    [[ -n $LIVE && $dev == "$LIVE" ]] && continue
+    args+=("$dev" "$d")
+done
+((${#args[@]})) || fail "The only disk is this USB."
+choose "Which disk should Grim Void go on?" "${args[@]}"
+DISK=$REPLY_VAL
+lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINTS "$DISK"; echo
+choose "How should the disk be used?" \
+    whole  "Erase the whole disk and use it for Grim Void" \
+    manual "Use partitions I already made (keeps other systems, like Windows)"
+PARTMODE=$REPLY_VAL
+FORMAT_ESP=yes
+if [[ $PARTMODE == manual ]]; then
+    mapfile -t PARTS < <(lsblk -lnpo NAME,SIZE,FSTYPE,LABEL,TYPE "$DISK" | awk '$NF=="part"' | sed 's/ part$//')
+    ((${#PARTS[@]})) || fail "$DISK has no partitions. Make some with cfdisk first."
+    args=(); for p in "${PARTS[@]}"; do args+=("${p%% *}" "$p"); done
+    choose "Which partition is for Grim Void? (it gets formatted as ext4)" "${args[@]}"
+    ROOTP=$REPLY_VAL
+    if [[ $UEFI == yes ]]; then
+        choose "Which partition is the EFI system partition (the small FAT one)?" "${args[@]}"
+        ESP=$REPLY_VAL
+        [[ $ESP == "$ROOTP" ]] && fail "The EFI partition and the Grim Void partition must be different."
+        if [[ $(lsblk -no FSTYPE "$ESP") == vfat ]]; then FORMAT_ESP=no; note "The EFI partition is kept as it is (other systems stay bootable)."
+        else yesno "$ESP isn't FAT. Format it as an EFI partition?" || fail "An EFI partition is needed."; fi
+    fi
+fi
+
+title "6. Kernel"
+choose "Which Linux kernel?" linux-grim "Linux Grim: ${GRIM_KERNEL_DESC[linux-grim]}" linux6.18 "Linux: ${GRIM_KERNEL_DESC[linux6.18]}"
+KERNEL=$REPLY_VAL
+
+title "7. Desktops"
+printf '%sWhich desktops? Type the numbers with spaces (like: 1 3), or 0 for none.%s\n' "$B" "$N"
+for i in "${!GRIM_DE_ORDER[@]}"; do de=${GRIM_DE_ORDER[$i]}; printf '  %s%d%s  %-8s %s\n' "$R" $((i + 1)) "$N" "${GRIM_DE_NAME[$de]}" "$G${GRIM_DE_DESC[$de]}$N"; done
+printf '  %s0%s  none (a console system; you can add one later with grimhelp)\n' "$R" "$N"
+while :; do
+    read -rp "> " picks
+    DESKTOPS=(); ok=1
+    for n in $picks; do
+        [[ $n == 0 ]] && continue
+        if [[ $n =~ ^[0-9]+$ ]] && ((n >= 1 && n <= ${#GRIM_DE_ORDER[@]})); then DESKTOPS+=("${GRIM_DE_ORDER[$((n - 1))]}"); else ok=0; fi
+    done
+    ((ok)) && [[ -n $picks ]] && break
+    echo "Type numbers from the list, like: 1 3"
+done
+DESKTOP=none
+if ((${#DESKTOPS[@]} == 1)); then DESKTOP=${DESKTOPS[0]}
+elif ((${#DESKTOPS[@]} > 1)); then
+    args=(); for de in "${DESKTOPS[@]}"; do args+=("$de" "${GRIM_DE_NAME[$de]}"); done
+    choose "Which one should start when you log in?" "${args[@]}" ask "Ask me every time"
+    DESKTOP=$REPLY_VAL
+fi
+
+title "8. Extras"
+AUTOUPD=daily
+choose "Update automatically?" daily "Yes, once a day (recommended)" weekly "Yes, once a week" off "No, I'll run 'grimctl update' myself"
+AUTOUPD=$REPLY_VAL
+choose "When Grim Void starts:" desktop "Start normally (desktop after login)" lowram "Low-RAM mode (console only, nothing else running)"
+BOOTMODE=$REPLY_VAL
+
+# hardware we can see -> extra packages
+EXTRA=()
+lspci 2>/dev/null | grep -qi 'vga.*nvidia\|3d.*nvidia' && { EXTRA+=("${GRIM_NVIDIA[@]}"); note "NVIDIA graphics found: adding its firmware (nouveau driver)."; }
+((${#DESKTOPS[@]})) && lspci 2>/dev/null | grep -qi 'vga.*intel' && EXTRA+=("${GRIM_INTEL_VIDEO[@]}")
+((${#DESKTOPS[@]})) && lspci 2>/dev/null | grep -qiE 'vga.*(amd|ati|radeon)' && EXTRA+=("${GRIM_AMD_VIDEO[@]}")
+
+# ------------------------------------------------------------------ summary
+title "Ready to install"
+printf '  %-14s %s\n' "Install" "$MODE" "Disk" "$DISK ($([[ $PARTMODE == whole ]] && echo 'ERASED' || echo "partition $ROOTP"))" \
+    "Boot" "$([[ $UEFI == yes ]] && echo UEFI || echo BIOS), GRUB" "Kernel" "$KERNEL" \
+    "Desktops" "${DESKTOPS[*]:-none} (starts: $DESKTOP)" "Shell" "$SHELL_" "User" "$USERNAME_ @ $HOSTNAME_" \
+    "Keyboard" "$KEYMAP" "Time zone" "$TZONE" "Updates" "$AUTOUPD" "Starts in" "$BOOTMODE" \
+    "Filesystem" "ext4 (noatime), zram swap"
+echo
+if [[ $PARTMODE == whole ]]; then
+    printf '%sEVERYTHING on %s will be erased.%s\n' "$R" "$DISK" "$N"
+else
+    printf '%s%s will be erased.%s\n' "$R" "$ROOTP" "$N"
+fi
+# the full package list (shown in a dry run)
+PKGS=("${GRIM_BASE[@]}" "$KERNEL")
+[[ $KERNEL == linux6.18 ]] && PKGS+=(linux-base)
+if [[ $UEFI == yes ]]; then PKGS+=("${GRIM_BOOT_UEFI[@]}"); else PKGS+=("${GRIM_BOOT_BIOS[@]}"); fi
+((${#DESKTOPS[@]})) && PKGS+=("${GRIM_DESKTOP_COMMON[@]}")
+for de in "${DESKTOPS[@]}"; do read -ra p <<<"${GRIM_DE_PKGS[$de]}"; PKGS+=("${p[@]}"); done
+[[ -n ${GRIM_SHELL_PKG[$SHELL_]} ]] && PKGS+=("${GRIM_SHELL_PKG[$SHELL_]}")
+PKGS+=("${EXTRA[@]}")
+mapfile -t PKGS < <(printf '%s\n' "${PKGS[@]}" | awk 'NF && !s[$0]++')
+if [[ $DRY == yes ]]; then
+    printf '%sDry run:%s nothing was changed. It would install %d packages:\n' "$B" "$N" "${#PKGS[@]}"
+    printf '%s\n' "${PKGS[*]}" | fold -s -w 78 | sed 's/^/  /'
+    exit 0
+fi
+read -rp "Type 'install' to start, anything else to stop: " go
+[[ $go == install ]] || { echo "Stopped. Nothing was changed."; exit 0; }
+
+# ------------------------------------------------------------------ disk
+title "Installing"
+umount -R "$MNT" 2>/dev/null
+if [[ $PARTMODE == whole ]]; then
+    step "Erasing $DISK" wipefs -af "$DISK"
+    if [[ $UEFI == yes ]]; then
+        step "Making partitions (EFI + Grim Void)" sfdisk -q "$DISK" <<<$'label: gpt\nsize=512M, type=U, name="EFI"\ntype=L, name="grimvoid"'
+        ESP=$(part "$DISK" 1); ROOTP=$(part "$DISK" 2)
+    else
+        step "Making partitions (BIOS boot + Grim Void)" sfdisk -q "$DISK" <<<$'label: gpt\nsize=1M, type=21686148-6447-6E49-6F6E-744E65656646, name="bios"\ntype=L, name="grimvoid"'
+        ROOTP=$(part "$DISK" 2)
+    fi
+    udevadm settle; sleep 1
+fi
+step "Formatting $ROOTP (ext4)" mkfs.ext4 -F -q -L grimvoid "$ROOTP"
+[[ $UEFI == yes && $FORMAT_ESP == yes ]] && step "Formatting $ESP (EFI)" mkfs.vfat -F 32 -n EFI "$ESP"
+mkdir -p "$MNT"
+step "Mounting" mount -o noatime "$ROOTP" "$MNT"
+if [[ $UEFI == yes ]]; then mkdir -p "$MNT/boot/efi"; step "Mounting the EFI partition" mount -o noatime "$ESP" "$MNT/boot/efi"; fi
+
+# ------------------------------------------------------------------ packages
+mkdir -p "$MNT/var/db/xbps/keys" "$MNT/etc/xbps.d"
+cp -a /var/db/xbps/keys/. "$MNT/var/db/xbps/keys/"
+cp /usr/share/grim/xbps.d/90-grim.conf "$MNT/etc/xbps.d/" 2>/dev/null || cp /etc/xbps.d/90-grim.conf "$MNT/etc/xbps.d/"
+REPOS=(-R "$REPO")
+[[ $MODE == online ]] && REPOS+=(-R "$GRIM_MIRROR")
+printf '%s::%s Installing %d packages %s(this is the long part)%s\n' "$R" "$N" "${#PKGS[@]}" "$G" "$N"
+XBPS_ARCH=$GRIM_ARCH xbps-install -Sy -r "$MNT" "${REPOS[@]}" "${PKGS[@]}" 2>&1 | tee -a "$LOG" | grep --line-buffered -E '^\[\*\]|installing|ERROR' | sed -u 's/^/   /'
+[[ ${PIPESTATUS[0]} -eq 0 ]] || fail "Package install failed."
+
+# ------------------------------------------------------------------ configure
+step "Writing settings" true
+echo "$HOSTNAME_" > "$MNT/etc/hostname"
+printf '127.0.0.1 localhost\n::1 localhost\n127.0.1.1 %s.localdomain %s\n' "$HOSTNAME_" "$HOSTNAME_" > "$MNT/etc/hosts"
+sed -i -E "s/^#?KEYMAP=.*/KEYMAP=\"$KEYMAP\"/; s/^#?HARDWARECLOCK=.*/HARDWARECLOCK=\"UTC\"/; s|^#?TIMEZONE=.*|TIMEZONE=\"$TZONE\"|" "$MNT/etc/rc.conf"
+ln -sf "/usr/share/zoneinfo/$TZONE" "$MNT/etc/localtime"
+echo 'LANG=C.UTF-8' > "$MNT/etc/locale.conf"
+{
+    echo "# Grim Void: <device>  <mount>  <type>  <options>  <dump> <check>"
+    echo "UUID=$(blkid -s UUID -o value "$ROOTP")  /          ext4  defaults,noatime  0 1"
+    [[ $UEFI == yes ]] && echo "UUID=$(blkid -s UUID -o value "$ESP")  /boot/efi  vfat  defaults,noatime,umask=0077  0 2"
+    echo "tmpfs  /tmp  tmpfs  defaults,nosuid,nodev  0 0"
+} > "$MNT/etc/fstab"
+# Void's own repository, so 'grimctl update' works
+echo "repository=$GRIM_MIRROR" > "$MNT/etc/xbps.d/00-repository-main.conf"
+# Grim's own packages (kernel, tools, dwm-grim, spotify-player-grim) aren't in Void's repository:
+# keep a copy on the new system so they can be installed later without the USB
+mkdir -p "$MNT/var/lib/grim/repo"
+cp "$REPO"/{grim-,grimfetch-,dwm-grim-,spotify-player-grim-,linux-grim}*.xbps "$MNT/var/lib/grim/repo/" 2>/dev/null
+XBPS_ARCH=$GRIM_ARCH xbps-rindex -a "$MNT"/var/lib/grim/repo/*.xbps >>"$LOG" 2>&1
+echo "repository=/var/lib/grim/repo" > "$MNT/etc/xbps.d/10-repository-grim.conf"
+
+# the system file
+mkdir -p "$MNT/etc/grim" "$MNT/var/lib/grim"
+sed -e "s|^hostname = .*|hostname = $HOSTNAME_|" -e "s|^timezone = .*|timezone = $TZONE|" -e "s|^keymap = .*|keymap = $KEYMAP|" \
+    -e "s|^desktop = [a-z]*|desktop = $DESKTOP|" -e "s|^boot = [a-z]*|boot = $BOOTMODE|" -e "s|^auto_update = [a-z]*|auto_update = $AUTOUPD|" \
+    -e '/^packages = \[/,/^\]/{/^  fish-shell$/d}' \
+    "$MNT/usr/share/grim/system.conf.example" > "$MNT/etc/grim/system.conf"
+[[ $SHELL_ != bash ]] && sed -i "/^packages = \[/a\\  ${GRIM_SHELL_PKG[$SHELL_]}" "$MNT/etc/grim/system.conf"
+
+# chroot work
+for f in dev proc sys run; do mount --rbind "/$f" "$MNT/$f"; mount --make-rslave "$MNT/$f"; done
+[[ $UEFI == yes ]] && mount --rbind /sys/firmware/efi/efivars "$MNT/sys/firmware/efi/efivars" 2>/dev/null
+cp /etc/resolv.conf "$MNT/etc/resolv.conf" 2>/dev/null
+
+G_USER=$USERNAME_ G_UPASS=$USERPASS G_RPASS=$ROOTPASS G_SHELL=${GRIM_SHELL_BIN[$SHELL_]} G_UEFI=$UEFI G_DISK=$DISK \
+G_BOOTMODE=$BOOTMODE G_AUTOUPD=$AUTOUPD G_KERNEL=$KERNEL \
+chroot "$MNT" /bin/bash -s >>"$LOG" 2>&1 <<'CHROOT' || fail "Setting up the new system failed."
+set -e
+# set every package up first (initramfs for the kernel, ...): this resets the account
+# files, so the users and passwords come after it
+xbps-reconfigure -fa
+# users
+useradd -m -G wheel,audio,video,input,network,plugdev,storage,optical -s "$G_SHELL" "$G_USER"
+printf '%s:%s\n' "$G_USER" "$G_UPASS" | chpasswd -c SHA512
+printf 'root:%s\n' "$G_RPASS" | chpasswd -c SHA512
+# make sure the passwords really took (an empty or locked one means you can't log in)
+for u in root "$G_USER"; do
+    case "$(grep "^$u:" /etc/shadow | cut -d: -f2)" in ""|"!"|"*"|"x") echo "password for $u was not set" >&2; exit 1 ;; esac
+done
+echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel; chmod 440 /etc/sudoers.d/10-wheel
+mkdir -p "/home/$G_USER/Pictures"; chown "$G_USER:" "/home/$G_USER/Pictures"
+
+# services: what runs normally (low-RAM mode has its own, smaller runlevel)
+for s in dbus polkitd NetworkManager chronyd grim-zram; do
+    [ -d "/etc/sv/$s" ] && ln -sf "/etc/sv/$s" "/etc/runit/runsvdir/default/$s"
+done
+[ "$G_AUTOUPD" != off ] && ln -sf /etc/sv/grim-autoupdate /etc/runit/runsvdir/default/
+# NetworkManager does Wi-Fi itself: keep dhcpcd and wpa_supplicant from fighting it
+rm -f /etc/runit/runsvdir/default/dhcpcd /etc/runit/runsvdir/default/wpa_supplicant
+# only one getty for each of tty1-tty3 (less RAM than six)
+rm -f /etc/runit/runsvdir/default/agetty-tty[456]
+
+# what the system file starts with: everything installed now is the base
+xbps-query -m | sed -E 's/-[^-]+_[0-9]+$//' | sort -u > /var/lib/grim/baseline
+grimctl get packages > /var/lib/grim/applied-packages || true
+grimctl get services > /var/lib/grim/applied-services || true
+
+# bootloader
+sed -i -E 's/^#?GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="Grim Void"/; s/^#?GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' /etc/default/grub
+grep -q '^GRUB_BACKGROUND' /etc/default/grub || echo 'GRUB_BACKGROUND="/usr/share/grim/grub-bg.png"' >> /etc/default/grub
+[ "$G_BOOTMODE" = lowram ] && sed -i -E 's/^(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*)"/\1 lowram"/' /etc/default/grub
+if [ "$G_UEFI" = yes ]; then
+    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="GrimVoid" --recheck
+    # also the fallback path, so firmware that ignores boot entries still finds it
+    grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable
+else
+    grub-install --target=i386-pc "$G_DISK"
+fi
+# the GRUB menu (the initramfs was made at the top)
+grub-mkconfig -o /boot/grub/grub.cfg
+echo CHROOT-OK
+CHROOT
+
+# ------------------------------------------------------------------ done
+umount -R "$MNT" 2>/dev/null
+title "Done"
+printf 'Grim Void is installed on %s%s%s.\n' "$B" "$DISK" "$N"
+printf 'Take out the USB and restart. Log in as %s%s%s on tty1%s.\n' "$B" "$USERNAME_" "$N" \
+    "$([[ $DESKTOP != none ]] && echo " and ${GRIM_DE_NAME[$DESKTOP]:-your desktop} starts")"
+echo "After that: grimhelp for apps and help, grimctl for the system."
+choose "What now?" reboot "Restart now" shell "Stay here (type 'reboot' when you're ready)"
+[[ $REPLY_VAL == reboot ]] && reboot
+exit 0

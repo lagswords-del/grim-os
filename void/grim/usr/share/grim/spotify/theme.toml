@@ -1,0 +1,28 @@
+[[themes]]
+name = "grim"
+[themes.palette]
+background = "#0a0a0a"
+foreground = "#e8e8e8"
+black = "#1a1a1a"
+red = "#c1121f"
+green = "#7a9a6a"
+yellow = "#c9a45c"
+blue = "#5f7f9f"
+magenta = "#9a5f8a"
+cyan = "#5f9a9a"
+white = "#d0d0d0"
+bright_black = "#4a4a4a"
+bright_red = "#e5383b"
+bright_green = "#9aba8a"
+bright_yellow = "#e0c07c"
+bright_blue = "#7f9fbf"
+bright_magenta = "#ba7faa"
+bright_cyan = "#7fbaba"
+bright_white = "#ffffff"
+[themes.component_style]
+block_title = { fg = "BrightRed", modifiers = ["Bold"] }
+playback_track = { fg = "BrightWhite", modifiers = ["Bold"] }
+playback_artists = { fg = "Red" }
+playback_progress_bar = { fg = "Red" }
+current_playing = { fg = "BrightRed", modifiers = ["Bold"] }
+selection = { bg = "Red", fg = "BrightWhite", modifiers = ["Bold"] }

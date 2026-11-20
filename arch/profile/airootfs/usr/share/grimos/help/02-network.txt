@@ -1,0 +1,20 @@
+WI-FI AND INTERNET
+
+Installed system (NetworkManager)
+  nmtui                        menus to connect to Wi-Fi
+  nmcli device wifi list       show networks nearby
+  nmcli device wifi connect "Name" password "secret"
+  KDE, GNOME and COSMIC also have a network icon in the panel.
+
+Live USB (iwd)
+  iwctl
+    station wlan0 scan
+    station wlan0 get-networks
+    station wlan0 connect "Name"
+    exit
+
+Wi-Fi card not found?
+  Run  lspci -k  and look for "Network controller". If it shows no
+  "Kernel driver in use", re-run griminstall with
+  "Find and install network drivers" turned on, or install the
+  matching linux-firmware-* package.

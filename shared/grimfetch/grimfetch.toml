@@ -1,0 +1,16 @@
+# grimfetch config. Copy to ~/.config/grimfetch/config.toml to make your own.
+# Colours: black red green yellow blue magenta cyan white, bright_<name>, default, or "#rrggbb".
+
+title_color = "red"        # the labels (OS, Kernel, ...) and user@host
+ascii_color = "white"      # the art on the left
+text_color  = "default"    # the values
+ascii = "/usr/share/grimos/ascii.txt"
+gap = 3                    # spaces between the art and the info
+show_title = true          # user@host line above the info
+show_colors = true         # the colour strip at the bottom
+
+# Which lines to show, in order. Available:
+#   os host kernel uptime packages shell desktop rice terminal resolution
+#   memory swap disk battery localip locale
+modules = ["os", "host", "kernel", "uptime", "packages", "shell", "desktop", "rice", "terminal",
+           "memory", "swap", "disk", "battery"]

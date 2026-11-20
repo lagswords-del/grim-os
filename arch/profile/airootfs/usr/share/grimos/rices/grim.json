@@ -1,0 +1,32 @@
+{
+  "name": "Grim",
+  "description": "Black glass and a red reaper. The Grim OS default.",
+  "order": 1,
+  "dark": true,
+  "colors": {
+    "bg": "#0b0b0c",
+    "bg2": "#141416",
+    "bg3": "#1f1f23",
+    "fg": "#e6e6e6",
+    "muted": "#7a7a80",
+    "accent": "#c1121f",
+    "accent_fg": "#ffffff",
+    "accent2": "#e05561",
+    "urgent": "#ff4d5a",
+    "border_active": "#c1121f",
+    "border_inactive": "#26262a"
+  },
+  "font": "Inconsolata Nerd Font Mono",
+  "font_size": 11,
+  "wallpaper": "grim.jpg",
+  "gaps": 8,
+  "border": 2,
+  "radius": 8,
+  "dock": true,
+  "bar_position": "top",
+  "gtk_theme": "Adwaita-dark",
+  "icon_theme": "Papirus-Dark",
+  "gnome_accent": "red",
+  "kde_scheme": "BreezeDark",
+  "bar_style": "reaper-pills"
+}

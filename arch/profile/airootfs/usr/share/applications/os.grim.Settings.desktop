@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Grim Settings
+Comment=Rices, bar, dock and shortcuts for Grim OS
+Exec=grim-settings
+Icon=/usr/share/grimos/logo.svg
+Categories=Settings;System;

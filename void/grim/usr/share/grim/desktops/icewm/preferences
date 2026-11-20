@@ -1,0 +1,28 @@
+# Grim Void: IceWM preferences (see /usr/share/icewm/preferences for every option)
+Theme="grim/default.theme"
+Win95Keys=0                 # Super is a modifier here, not the start-menu key
+TaskBarClockLeds=0
+TimeFormat="%a %d %b  %H:%M"
+TaskBarShowWorkspaces=1
+WorkspaceNames=" 1 ", " 2 ", " 3 ", " 4 "
+TerminalCommand="grim-term"
+
+# Grim's keys: close, fullscreen, and Super+T to snap between maximised (tiled) and floating
+KeyWinClose="Super+q"
+KeyWinFullscreen="Super+f"
+KeyWinMaximize="Super+t"
+KeyWinMinimize="Super+m"
+KeySysWorkspace1="Super+1"
+KeySysWorkspace2="Super+2"
+KeySysWorkspace3="Super+3"
+KeySysWorkspace4="Super+4"
+KeySysWorkspace1TakeWin="Super+Shift+1"
+KeySysWorkspace2TakeWin="Super+Shift+2"
+KeySysWorkspace3TakeWin="Super+Shift+3"
+KeySysWorkspace4TakeWin="Super+Shift+4"
+KeySysTileHorizontal="Super+Shift+t"
+KeySysMenu="Super+space"
+
+# Super + left drag moves a window, Super + right drag resizes it (from anywhere in the window)
+MouseWinMove="Super+Pointer_Button1"
+MouseWinSize="Super+Pointer_Button3"

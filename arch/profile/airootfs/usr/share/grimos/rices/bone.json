@@ -1,0 +1,32 @@
+{
+  "name": "Bone",
+  "description": "Pale paper and black ink, with the red reaper as the only colour.",
+  "order": 3,
+  "dark": false,
+  "colors": {
+    "bg": "#ecebe6",
+    "bg2": "#e2e0d9",
+    "bg3": "#d3d1c9",
+    "fg": "#161616",
+    "muted": "#6b6a66",
+    "accent": "#161616",
+    "accent_fg": "#ecebe6",
+    "accent2": "#c1121f",
+    "urgent": "#c1121f",
+    "border_active": "#161616",
+    "border_inactive": "#c9c7bf"
+  },
+  "font": "Inconsolata Nerd Font Mono",
+  "font_size": 11,
+  "wallpaper": "bone.jpg",
+  "gaps": 10,
+  "border": 2,
+  "radius": 6,
+  "dock": true,
+  "bar_position": "top",
+  "gtk_theme": "Adwaita",
+  "icon_theme": "Papirus",
+  "gnome_accent": "slate",
+  "kde_scheme": "BreezeLight",
+  "bar_style": "red-island"
+}

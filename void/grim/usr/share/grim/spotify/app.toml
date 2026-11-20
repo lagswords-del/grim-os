@@ -1,0 +1,7 @@
+# Grim Void: spotify-player settings (grim-spotify copies this once to ~/.config/spotify-player/)
+theme = "grim"
+border_type = "Rounded"
+progress_bar_type = "Line"
+cover_img_width = 8
+enable_cover_image_cache = true
+enable_notify = true

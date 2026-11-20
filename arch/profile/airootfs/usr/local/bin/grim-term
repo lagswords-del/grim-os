@@ -1,0 +1,15 @@
+#!/bin/sh
+# grim-term: opens whichever terminal this desktop has. Pass -e CMD to run something in it.
+for t in alacritty kitty foot konsole gnome-console kgx xfce4-terminal cosmic-term xterm; do
+    if command -v "$t" >/dev/null; then
+        if [ "$1" = "-e" ]; then shift
+            case $t in
+                gnome-console|kgx) exec "$t" -- "$@" ;;
+                foot) exec foot "$@" ;;
+                *) exec "$t" -e "$@" ;;
+            esac
+        fi
+        exec "$t"
+    fi
+done
+notify-send "Grim OS" "No terminal is installed."

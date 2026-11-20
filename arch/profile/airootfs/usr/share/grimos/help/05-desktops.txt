@@ -1,0 +1,60 @@
+DESKTOPS AND SHORTCUTS
+
+Pick your desktop on the login screen (F3 on the text login screen).
+
+The same keys work on every desktop (Super is the Windows key):
+  Super+T            toggle floating
+                     (IceWM, Openbox, XFCE, GNOME and KDE always float,
+                      so there Super+T maximizes / restores instead)
+  Super+Q            close the window
+  Super+Space        find an app
+  Super+Return       open a terminal
+  Super+F1           Grim Settings (rices, bar, dock)
+  Super+Shift+E      power menu
+  Print              screenshot: drag over an area
+  Super+left drag    move a window
+  Super+right drag   resize a window
+
+Tiling window managers (i3, Sway, Hyprland, Niri) also have
+  Super+1..9 workspaces, Super+arrows to move focus,
+  Super+Shift+arrows to move windows, Super+F fullscreen.
+
+Bars: Polybar on i3, Openbox and IceWM, Waybar on Sway, Hyprland and Niri,
+the built-in panel on XFCE, GNOME, KDE and COSMIC. Bar styles (Grim Settings > Bars):
+Classic, Reaper Pills, Red Island, Nord Pills, Frost Glass, Graphite Icons, CachyOS Minimal.
+Dock: Plank (X11), nwg-dock (Wayland), Dash to Panel (GNOME).
+Turn the dock on or off in Grim Settings.
+
+Rices: Grim (black and red), Nord Snow (cold blue) and Bone (light).
+Apply one in Grim Settings, or in a terminal:  grim-rice apply nord-snow
+Your own config files are kept next to the new ones as *.pre-grim.
+
+GRIM DE (the Grim desktop)
+  Pick "Grim" on the login screen. It's niri (scrolling tiling, blur)
+  with Grim Shell (bar and dock). Settings: Super+F1 or Grim DE Settings.
+  Super+G turns game mode on and off: no blur, no transparency, no
+  animations, for the best frame rates. Games always run solid anyway.
+  Your own niri additions go in ~/.config/grim-de/niri/custom.kdl.
+  Bar: click any icon for a small menu. The sliders icon is the control
+  center (Wi-Fi, Bluetooth, Do Not Disturb, game mode, volume, brightness,
+  what's playing). The bell is the notification centre. An arrow icon
+  shows up when updates are ready.
+  Bar layouts (Grim DE Settings > Bar > Layout): full strip, floating glass,
+  three pills, island, minimal, Windows 7 taskbar. Time and date are
+  separate: show either or both. Workspaces as dots or numbers.
+  Dock (Grim DE Settings > Dock): pick the style, the screen edge, and
+  build it from items (apps, app finder, workspaces, window title,
+  clock, date, separators, gaps, your own buttons), each in its own pill
+  if you like.
+  Hide a window into the dock: click its app in the dock while it's
+  focused, or press Super+Shift+M. Click the app again to bring it back.
+  Windows 7 look: Grim DE Settings > Windows > Windows 7 style.
+  grimfetch colours: Grim DE Settings > Terminal (or Grim Settings).
+
+UPDATES AND DOWNLOADS
+  update             update everything
+  update --mirrors   pick the fastest download mirrors again
+                     (also done every week, and by update when the list is old)
+  pacman downloads 10 packages at once, shows colour and a Pac-Man bar,
+  keeps the last 2 versions of each package, and tells you when a reboot
+  is needed or when packages aren't needed any more.

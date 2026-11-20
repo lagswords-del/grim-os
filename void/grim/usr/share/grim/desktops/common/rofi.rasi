@@ -1,0 +1,17 @@
+/* Grim Void: rofi (one setting per line: rofi misreads a one-line configuration block) */
+configuration {
+    modes: "drun,run";
+    show-icons: true;
+    display-drun: "";
+}
+* {
+    background-color: #0a0a0aee;
+    text-color: #e8e8e8;
+    font: "Inconsolata 13";
+}
+window { border: 2px; border-color: #c1121f; border-radius: 8px; width: 520px; }
+inputbar { padding: 10px; }
+prompt { text-color: #c1121f; }
+element { padding: 6px 10px; }
+element selected { background-color: #c1121f; text-color: #ffffff; }
+element-text, element-icon { background-color: inherit; text-color: inherit; }

@@ -1,0 +1,7 @@
+    <!-- Grim Void keys -->
+    <keybind key="W-Return"><action name="Execute"><command>grim-term</command></action></keybind>
+    <keybind key="W-q"><action name="Close"/></keybind>
+    <keybind key="W-f"><action name="ToggleFullscreen"/></keybind>
+    <keybind key="W-t"><action name="ToggleMaximize"/></keybind>
+    <keybind key="W-d"><action name="Execute"><command>rofi -show drun</command></action></keybind>
+    <keybind key="W-S-e"><action name="Exit"><prompt>yes</prompt></action></keybind>

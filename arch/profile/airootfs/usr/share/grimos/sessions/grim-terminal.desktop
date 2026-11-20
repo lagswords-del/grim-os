@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=No desktop (terminal)
+Comment=A text console with the Grim OS banner. Type exit to log out.
+Exec=/usr/local/bin/grim-tty-session

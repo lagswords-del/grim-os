@@ -1,0 +1,10 @@
+NAME="Grim OS"
+PRETTY_NAME="Grim OS 1.1.5"
+ID=grimos
+ID_LIKE=arch
+VERSION="1.1.5"
+VERSION_ID=1.1.5
+BUILD_ID=rolling
+ANSI_COLOR="0;31"
+HOME_URL="https://archlinux.org/"
+LOGO=grimos

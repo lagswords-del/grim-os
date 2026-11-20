@@ -1,0 +1,49 @@
+#! /bin/sh
+# Grim OS: adds a "Low RAM" entry for each kernel in /boot to the GRUB menu.
+# It boots straight to a text console with nothing else running
+# (systemd.unit=grim-lowram.target). grub-mkconfig runs this file.
+set -e
+
+prefix="/usr"
+exec_prefix="/usr"
+datarootdir="/usr/share"
+. "${pkgdatadir:-/usr/share/grub}/grub-mkconfig_lib"
+
+if [ "x${GRUB_DEVICE_UUID}" = "x" ] || [ "x${GRUB_DISABLE_LINUX_UUID}" = "xtrue" ]; then
+  root="root=${GRUB_DEVICE}"
+else
+  root="root=UUID=${GRUB_DEVICE_UUID}"
+fi
+flags=""
+if [ "x${GRUB_FS}" = "xbtrfs" ]; then
+  sv="$(make_system_path_relative_to_its_root /)"; sv="${sv#/}"
+  [ -n "$sv" ] && flags="rootflags=subvol=${sv}"
+fi
+
+bootdev="$(${grub_probe:-grub-probe} --target=device /boot)"
+access="$(prepare_grub_to_access_device "$bootdev" | sed 's/^/\t/')"
+
+for k in /boot/vmlinuz-*; do
+  [ -f "$k" ] || continue
+  name="${k#/boot/vmlinuz-}"
+  [ -f "/boot/initramfs-${name}.img" ] || continue
+  rel="$(make_system_path_relative_to_its_root "$k")"
+  dir="${rel%/*}"
+  initrd=""
+  for u in intel-ucode.img amd-ucode.img; do
+    [ -f "/boot/$u" ] && initrd="$initrd ${dir}/$u"
+  done
+  initrd="$initrd ${dir}/initramfs-${name}.img"
+  echo "Found Grim OS low-RAM entry: $k" >&2
+  cat <<ENTRY
+menuentry 'Grim OS - Low RAM, no desktop (${name})' --class grimos --class gnu-linux --class gnu --class os {
+	load_video
+	set gfxpayload=keep
+	insmod gzio
+${access}
+	echo 'Loading ${name} in low-RAM mode...'
+	linux ${rel} ${root} rw ${flags} ${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT} systemd.unit=grim-lowram.target
+	initrd ${initrd}
+}
+ENTRY
+done

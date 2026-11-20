@@ -1,0 +1,12 @@
+grim-spotify
+============
+Spotify in the terminal, in Grim's colours, with cover art and lyrics.
+Install it from grimhelp (Music and video) or: sudo grimctl install spotify-player-grim
+Needs Spotify Premium (Spotify's rule for every player that isn't theirs).
+
+  grim-spotify            open it (the first time it signs you in)
+  grim-spotify keys       the key list
+  grim-spotify next / prev / play     control it from another terminal or a keybind
+
+  space play/pause   n/p next/previous   >/< fast forward/back   +/- volume
+  l lyrics   u p playlists   g y liked songs   / search   z queue   ? every key

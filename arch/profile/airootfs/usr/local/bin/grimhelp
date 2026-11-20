@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+# grimhelp: Grim OS help pages and app installer.
+#   grimhelp           menu
+#   grimhelp apps      jump straight to the app list
+set -uo pipefail
+
+SHARE=/usr/share/grimos
+HELP=$SHARE/help
+BT="Grim OS help"
+AUR_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/grimos-aur
+export DIALOGRC=$SHARE/dialogrc
+export NCURSES_NO_UTF8_ACS=1
+# shellcheck source=/usr/share/grimos/packages.sh
+source "$SHARE/packages.sh"
+
+d() { dialog --backtitle "$BT" "$@" 3>&1 1>&2 2>&3; }
+msg() { dialog --backtitle "$BT" --title "${2:-Grim OS}" --msgbox "$1" 0 0; }
+ask() { dialog --backtitle "$BT" --title "${2:-Grim OS}" --yesno "$1" 0 0; }
+live() { [[ -d /run/archiso ]]; }
+as_root() { if ((EUID == 0)); then "$@"; else sudo "$@"; fi; }
+installed() { pacman -Qq "$1" &>/dev/null; }
+
+page() { dialog --backtitle "$BT" --title "$2" --exit-label "Back" --textbox "$HELP/$1" 24 76; }
+
+# ------------------------------------------------------------------ apps
+enable_multilib() {
+    grep -q '^\[multilib\]' /etc/pacman.conf && return 0
+    echo ":: Turning on the multilib repository (32-bit libraries Steam needs)"
+    as_root sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf
+    as_root pacman -Sy
+}
+
+steam_extras() {
+    # 32-bit graphics driver that matches the GPU, so pacman doesn't have to ask
+    local gpu; gpu=$(lspci -nn 2>/dev/null | grep -E 'VGA|3D|Display')
+    if installed nvidia-utils; then echo lib32-nvidia-utils
+    elif grep -q '\[1002:' <<<"$gpu"; then echo lib32-vulkan-radeon
+    elif grep -q '\[8086:' <<<"$gpu"; then echo lib32-vulkan-intel
+    else echo lib32-mesa; fi
+}
+
+aur_install() {
+    local pkg=$1
+    if ((EUID == 0)); then
+        echo "!! $pkg comes from the AUR, which can't be built as root. Run grimhelp as your normal user."
+        return 1
+    fi
+    as_root pacman -S --needed --noconfirm base-devel git || return 1
+    mkdir -p "$AUR_DIR"
+    if [[ -d $AUR_DIR/$pkg/.git ]]; then
+        git -C "$AUR_DIR/$pkg" pull --ff-only
+    else
+        git clone "https://aur.archlinux.org/$pkg.git" "$AUR_DIR/$pkg" || return 1
+    fi
+    (cd "$AUR_DIR/$pkg" && makepkg -si --needed)
+}
+
+apps_menu() {
+    if live; then
+        msg "Apps can't be installed on the live USB (there's no room and it resets on reboot).\n\nInstall Grim OS with griminstall first, then run grimhelp again." "Install apps"
+        return
+    fi
+    local -a items=(); local entry key name src pkgs tag state
+    for entry in "${GRIM_APPS[@]}"; do
+        IFS='|' read -r key name src pkgs <<<"$entry"
+        tag=""; case $src in aur) tag=" [AUR]" ;; multilib) tag=" [32-bit repo]" ;; esac
+        state=off
+        installed "${pkgs%% *}" && tag+="  (installed)"
+        items+=("$key" "$name$tag" "$state")
+    done
+    local picked
+    picked=$(d --title "Install apps" --separate-output --checklist \
+        "Tick apps with SPACE, then ENTER. Only what you tick is installed.\n[AUR] apps are built from community recipes." \
+        22 78 13 "${items[@]}") || return
+    [[ -z $picked ]] && return
+
+    local -a repo=() aur=(); local need_multilib=no
+    for entry in "${GRIM_APPS[@]}"; do
+        IFS='|' read -r key name src pkgs <<<"$entry"
+        grep -qx "$key" <<<"$picked" || continue
+        case $src in
+            repo) repo+=($pkgs) ;;
+            multilib) need_multilib=yes; repo+=($pkgs "$(steam_extras)") ;;
+            aur) aur+=($pkgs) ;;
+        esac
+    done
+    if ((${#aur[@]})); then
+        ask "These come from the AUR (made by the community, not checked by Arch):\n\n  ${aur[*]}\n\nThey'll be built on this computer. Continue?" "AUR" || aur=()
+    fi
+
+    clear
+    grim-banner "installing apps" 2>/dev/null
+    local ok=yes
+    [[ $need_multilib == yes ]] && { enable_multilib || ok=no; }
+    if ((${#repo[@]})); then
+        echo ":: Installing: ${repo[*]}"
+        as_root pacman -S --needed "${repo[@]}" || ok=no
+    fi
+    local p; for p in "${aur[@]}"; do echo ":: Building $p from the AUR"; aur_install "$p" || ok=no; done
+    echo
+    if [[ $ok == yes ]]; then echo "Done. Your new apps are in the app menu."; else echo "Some apps did not install; see the messages above."; fi
+    read -rp "Press Enter to go back to grimhelp... " _
+}
+
+# ------------------------------------------------------------------ desktops
+# A package that proves each desktop is installed (some are groups)
+declare -A DE_PROOF=([grim]=quickshell [kde]=plasma-meta [gnome]=gnome-shell [cosmic]=cosmic-session [xfce]=xfce4-session
+                     [hyprland]=hyprland [niri]=niri [sway]=sway [i3]=i3-wm [openbox]=openbox [icewm]=icewm)
+
+current_dm() {
+    local link; link=$(readlink /etc/systemd/system/display-manager.service 2>/dev/null)
+    [[ -n $link ]] && basename "$link" .service
+}
+
+setup_greetd() {
+    as_root pacman -S --needed --noconfirm greetd greetd-tuigreet || return 1
+    as_root tee /etc/greetd/config.toml >/dev/null <<'EOF'
+[terminal]
+vt = 1
+
+[default_session]
+command = "tuigreet --time --remember --remember-user-session --asterisks --greeting 'Welcome to Grim OS' --xsession-wrapper 'startx /usr/bin/env'"
+user = "greeter"
+EOF
+    as_root install -Dm644 "$SHARE/sessions/grim-terminal.desktop" /usr/share/wayland-sessions/grim-terminal.desktop
+    as_root systemctl enable greetd.service
+}
+
+desktops_install() {
+    if live; then
+        msg "Desktops can't be added to the live USB.\n\nInstall Grim OS with griminstall, where you can pick desktops, then come back here to add more." "Desktops"
+        return
+    fi
+    local -a items=(); local de tag
+    for de in "${GRIM_DE_ORDER[@]}"; do
+        tag="${GRIM_DE_DESC[$de]}"
+        installed "${DE_PROOF[$de]}" && tag+="  (installed)"
+        items+=("$de" "${GRIM_DE_NAME[$de]}: $tag" off)
+    done
+    local picked
+    picked=$(d --title "Install a desktop" --separate-output --checklist \
+        "Tick desktops or window managers with SPACE, then ENTER.\nThey download from the internet. Pick one on the login screen afterwards (F3)." \
+        20 84 10 "${items[@]}") || return
+    [[ -z $picked ]] && return
+    local -a pkgs=() new=(); local needs_dm=""
+    for de in $picked; do
+        installed "${DE_PROOF[$de]}" && continue
+        new+=("$de")
+        # shellcheck disable=SC2206
+        pkgs+=(${GRIM_DE_PKGS[$de]})
+        [[ -n ${GRIM_DE_DM[$de]:-} && -z $needs_dm ]] && needs_dm=${GRIM_DE_DM[$de]}
+    done
+    if ((${#new[@]} == 0)); then msg "Everything you picked is already installed." "Desktops"; return; fi
+    local names=(); for de in "${new[@]}"; do names+=("${GRIM_DE_NAME[$de]}"); done
+    ask "Install ${names[*]}?\n\nThis downloads ${#pkgs[@]} packages plus what they need." "Desktops" || return
+
+    clear; grim-banner "installing desktops" 2>/dev/null
+    local ok=yes
+    as_root pacman -S --needed "${GRIM_DESKTOP_COMMON[@]}" "${pkgs[@]}" || ok=no
+    if [[ $ok == yes && -z $(current_dm) ]]; then
+        # first desktop on this computer: turn on a login screen
+        if [[ -n $needs_dm ]]; then as_root systemctl enable "$needs_dm.service" || ok=no
+        else setup_greetd || ok=no; fi
+    fi
+    if [[ $ok == yes && " ${new[*]} " == *" grim "* ]]; then
+        as_root install -Dm644 "$SHARE/sessions/grim.desktop" /usr/share/wayland-sessions/grim.desktop
+        grim-de apply
+    fi
+    if [[ $ok == yes ]] && command -v grim-rice >/dev/null; then
+        local rice; rice=$(grim-rice current 2>/dev/null || echo grim)
+        for de in "${new[@]}"; do grim-rice apply "$rice" --desktop "$de" --no-reload; done
+    fi
+    echo
+    if [[ $ok == yes ]]; then
+        echo "Done. Log out (or reboot) and pick ${names[*]} on the login screen with F3."
+    else
+        echo "Something went wrong (see above). Check your internet and try again."
+    fi
+    read -rp "Press Enter to go back to grimhelp... " _
+}
+
+# ------------------------------------------------------------------ extras
+open_settings() {
+    if [[ -z ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]]; then
+        grimsettings tui
+        return
+    fi
+    (grim-settings >/dev/null 2>&1 &)
+    msg "Grim Settings is opening in its own window.\n\nShortcut: Super+F1" "Grim Settings"
+}
+
+screenshot_tool() {
+    local missing=() p
+    for p in maim xclip grim slurp wl-copy notify-send; do command -v "$p" >/dev/null || missing+=("$p"); done
+    local text="Press PrtScreen (Print), then drag over the part of the screen you want.\n\nThe picture is saved in ~/Pictures/Screenshots and copied, so you can paste it straight into Discord or a browser. Press Esc to cancel.\n\nGNOME, KDE and COSMIC use their own screenshot tool on PrtScreen, which also lets you drag an area."
+    if ((${#missing[@]})) && ! live; then
+        if ask "$text\n\nSome parts are missing: ${missing[*]}\nInstall them now?" "Screenshot tool"; then
+            clear
+            as_root pacman -S --needed maim xclip grim slurp wl-clipboard libnotify
+            read -rp "Press Enter to go back... " _
+        fi
+    else
+        msg "$text" "Screenshot tool"
+    fi
+}
+
+pkglist_page() {
+    local f=/etc/grimos/packages.conf
+    if [[ ! -f $f ]]; then
+        msg "The package list is off on this computer.\n\nIt's turned on during install (griminstall > Package list). It keeps all your apps in $f: add a name and run 'update' to install it, delete a line and run 'update' to remove it." "Package list"
+        return
+    fi
+    if ask "Your package list:\n\n$(grep -vE '^[[:space:]]*(#|$)' "$f" | head -30 | sed 's/^/  /')\n\nOpen it in nano to edit? Run 'update' afterwards to apply." "Package list"; then
+        as_root "${EDITOR:-nano}" "$f"
+    fi
+}
+
+# ------------------------------------------------------------------ main
+main_menu() {
+    while :; do
+        local c
+        c=$(d --title "grimhelp" --cancel-label "Exit" --menu "What do you need?" 22 66 14 \
+            start    "Getting started" \
+            network  "Wi-Fi and internet" \
+            software "Installing and removing software" \
+            update   "Updating Grim OS" \
+            desktops "Desktops and keyboard shortcuts" \
+            boot     "Bootloader (GRUB / Limine) and USB boot" \
+            trouble  "Troubleshooting" \
+            apps     ">> Install apps (Discord, Steam, Spotify...)" \
+            adddesk  ">> Install a desktop or window manager" \
+            settings ">> Grim Settings (rices, bar, dock)" \
+            shot     ">> Screenshot tool (PrtScreen, drag an area)" \
+            pkglist  ">> Package list (/etc/grimos/packages.conf)" \
+            info     ">> Show system info (grimfetch)") || { clear; exit 0; }
+        case $c in
+            start) page 01-start.txt "Getting started" ;;
+            network) page 02-network.txt "Wi-Fi and internet" ;;
+            software) page 03-software.txt "Software" ;;
+            update) page 04-update.txt "Updating" ;;
+            desktops) page 05-desktops.txt "Desktops" ;;
+            boot) page 06-boot.txt "Bootloader" ;;
+            trouble) page 07-trouble.txt "Troubleshooting" ;;
+            apps) apps_menu ;;
+            adddesk) desktops_install ;;
+            settings) open_settings ;;
+            shot) screenshot_tool ;;
+            pkglist) pkglist_page ;;
+            info) clear; grimfetch; read -rp "Press Enter to go back... " _ ;;
+        esac
+    done
+}
+
+if ! command -v dialog >/dev/null; then
+    echo "grimhelp needs 'dialog':  sudo pacman -S dialog"; exit 1
+fi
+[[ ${1:-} == apps ]] && { apps_menu; clear; exit 0; }
+main_menu

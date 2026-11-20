@@ -1,0 +1,460 @@
+#!/bin/bash
+# grimctl: the Grim Void control command.
+#
+#   grimctl apply                  make the system match /etc/grim/system.conf
+#   grimctl edit                   open the system file, then apply it
+#   grimctl update                 update everything (Void packages, Flatpaks, source builds)
+#   grimctl install PKG...         install and add to the system file   (@flatpak ID, @src NAME|URL)
+#   grimctl remove PKG...          uninstall and take out of the system file
+#   grimctl search WORDS           search Void's packages and Flathub
+#   grimctl build NAME|URL         compile something from source and install it (Grim's own way)
+#   grimctl builds                 list what you've built from source
+#   grimctl wallpaper set FILE     change the wallpaper (any desktop)
+#   grimctl wallpaper              show the current one
+#   grimctl mode [lowram|desktop]  switch between the full system and low-RAM mode now
+#   grimctl boot lowram|desktop    what Grim Void starts in
+#   grimctl wifi                   find and join a Wi-Fi network
+#   grimctl fetch logo void|reaper choose grimfetch's logo
+#   grimctl zram                   show compressed-RAM swap use
+#   grimctl get KEY                print a value from the system file
+set -uo pipefail
+
+CONF=${GRIM_CONF:-/etc/grim/system.conf}
+STATE=/var/lib/grim
+SRC=/var/lib/grim/src          # Grim's source builds live here
+VPKG=/var/lib/grim/void-packages
+R=$'\e[31m' B=$'\e[1;97m' G=$'\e[90m' N=$'\e[0m'
+
+say()  { printf '%s::%s %s\n' "$R" "$N" "$*"; }
+warn() { printf '%s!!%s %s\n' "$R" "$N" "$*" >&2; }
+die()  { warn "$*"; exit 1; }
+as_root() { if ((EUID == 0)); then "$@"; else sudo "$@"; fi; }
+need_root() { ((EUID == 0)) || exec sudo "$0" "$@"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ------------------------------------------------------------ the system file
+# Format (see /usr/share/grim/system.conf.example):
+#   key = value            single values
+#   key = [ a b c ]        lists, may span lines; # starts a comment
+get() {   # get KEY -> value or list items, one per line
+    local key=$1
+    [[ -r $CONF ]] || return 1
+    awk -v k="$key" '
+        { sub(/#.*/, "") }
+        !inlist && $0 ~ "^[ \t]*" k "[ \t]*=" {
+            sub(/^[^=]*=[ \t]*/, "")
+            if ($0 ~ /^\[/) { inlist = 1; sub(/^\[/, "") }
+            else { gsub(/^[ \t"]+|[ \t"]+$/, ""); print; exit }
+        }
+        inlist {
+            done = sub(/\].*/, "")
+            n = split($0, w, /[ \t,]+/)
+            for (i = 1; i <= n; i++) if (w[i] != "") print w[i]
+            if (done) exit
+        }' "$CONF"
+}
+
+set_value() {   # set_value KEY VALUE  (single values only)
+    local key=$1 val=$2
+    if grep -qE "^[[:space:]]*$key[[:space:]]*=" "$CONF"; then
+        # keep the comment at the end of the line, if there is one
+        awk -v k="$key" -v v="$val" '
+            !done && $0 ~ "^[ \t]*" k "[ \t]*=" {
+                c = ""; if (match($0, /[ \t]*#.*/)) c = substr($0, RSTART)
+                sub(/=.*/, "= " v); $0 = $0 c; done = 1
+            } { print }' "$CONF" > "$CONF.new" && cat "$CONF.new" > "$CONF" && rm -f "$CONF.new"
+    else
+        printf '%s = %s\n' "$key" "$val" >> "$CONF"
+    fi
+}
+
+list_add() {   # list_add KEY ITEM : adds a line before the list's closing ]
+    local key=$1 item=$2
+    get "$key" | grep -qxF -- "$item" && return 0
+    if ! grep -qE "^[[:space:]]*$key[[:space:]]*=" "$CONF"; then
+        printf '%s = [\n]\n' "$key" >> "$CONF"
+    fi
+    awk -v k="$key" -v it="$item" '
+        !done && $0 ~ "^[ \t]*" k "[ \t]*=" { inl = 1 }
+        inl && !done && /\]/ {
+            if ($0 ~ "^[ \t]*" k "[ \t]*=") { sub(/\]/, "\n  " it "\n]") }   # one-line list
+            else { print "  " it }
+            done = 1; inl = 0
+        }
+        { print }' "$CONF" > "$CONF.new" && cat "$CONF.new" > "$CONF" && rm -f "$CONF.new"
+}
+
+list_del() {   # list_del KEY ITEM
+    local key=$1 item=$2
+    awk -v k="$key" -v it="$item" '
+        $0 ~ "^[ \t]*" k "[ \t]*=" { inl = 1 }
+        inl {
+            line = $0; sub(/#.*/, "", line)
+            n = split(line, w, /[ \t,\[\]=]+/)
+            for (i = 1; i <= n; i++) if (w[i] == it) { gsub("(^|[ \t])" it "([ \t]|$)", " ", $0); if ($0 ~ /^[ \t]*(#.*)?$/) skip = 1 }
+            if (line ~ /\]/) inl = 0
+        }
+        { if (!skip) print; skip = 0 }' "$CONF" > "$CONF.new" && cat "$CONF.new" > "$CONF" && rm -f "$CONF.new"
+}
+
+# packages from the file, split by kind
+want_xbps()    { get packages | grep -v '^@' ; }
+want_flatpak() { get packages | sed -n 's/^@flatpak://p'; }
+want_src()     { get packages | sed -n 's/^@src://p'; }
+
+xbps_manual() { xbps-query -m 2>/dev/null | sed -E 's/-[^-]+_[0-9]+$//' | sort -u; }
+installed()   { xbps-query "$1" >/dev/null 2>&1; }
+
+# ------------------------------------------------------------ apply
+cmd_apply() {
+    need_root apply "$@"
+    [[ -r $CONF ]] || die "no $CONF (copy /usr/share/grim/system.conf.example there)"
+    mkdir -p "$STATE"
+    local quiet=${1:-}
+    touch "$STATE/applied-packages" "$STATE/baseline"
+
+    # 1. apps installed with xbps-install (not through the file) get added to it
+    local p added=()
+    while read -r p; do
+        [[ -z $p ]] && continue
+        grep -qxF "$p" "$STATE/baseline" && continue
+        grep -qxF "$p" "$STATE/applied-packages" && continue
+        want_xbps | grep -qxF "$p" && continue
+        list_add packages "$p"; added+=("$p")
+    done < <(xbps_manual)
+    ((${#added[@]})) && say "Added to the system file (you installed them): ${added[*]}"
+
+    # 2. install what the file lists
+    local missing=()
+    while read -r p; do [[ -n $p ]] && ! installed "$p" && missing+=("$p"); done < <(want_xbps)
+    if ((${#missing[@]})); then
+        say "Installing: ${missing[*]}"
+        xbps-install -Sy "${missing[@]}" || warn "some packages failed to install"
+    fi
+
+    # 3. remove what was taken out of the file (only things the file put there)
+    local gone=()
+    while read -r p; do
+        [[ -z $p ]] && continue
+        want_xbps | grep -qxF "$p" && continue
+        installed "$p" && gone+=("$p")
+    done < "$STATE/applied-packages"
+    if ((${#gone[@]})); then
+        say "Removing (deleted from the system file): ${gone[*]}"
+        xbps-remove -Ry "${gone[@]}" || warn "some packages could not be removed"
+    fi
+    want_xbps > "$STATE/applied-packages"
+
+    # 4. Flatpaks
+    if want_flatpak | grep -q . || [[ -s $STATE/applied-flatpaks ]]; then
+        have flatpak || xbps-install -Sy flatpak
+        flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+        while read -r p; do [[ -n $p ]] && ! flatpak info "$p" >/dev/null 2>&1 && flatpak install -y --noninteractive flathub "$p"; done < <(want_flatpak)
+        touch "$STATE/applied-flatpaks"
+        while read -r p; do
+            [[ -n $p ]] && ! want_flatpak | grep -qxF "$p" && flatpak uninstall -y --noninteractive "$p"
+        done < "$STATE/applied-flatpaks"
+        want_flatpak > "$STATE/applied-flatpaks"
+    fi
+
+    # 5. source builds
+    touch "$STATE/applied-src"
+    while read -r p; do [[ -n $p ]] && ! src_installed "$p" && build_one "$p"; done < <(want_src)
+    while read -r p; do
+        [[ -n $p ]] && ! want_src | grep -qxF "$p" && src_remove "$p"
+    done < "$STATE/applied-src"
+    want_src > "$STATE/applied-src"
+
+    # 6. services (runit): the file's list is what runs in the normal runlevel
+    local sv dir=/etc/runit/runsvdir/default
+    touch "$STATE/applied-services"
+    while read -r sv; do
+        [[ -z $sv ]] && continue
+        if [[ -d /etc/sv/$sv ]]; then [[ -e $dir/$sv ]] || { ln -s "/etc/sv/$sv" "$dir/$sv"; say "Service on: $sv"; }
+        else warn "no service called $sv (is its package installed?)"; fi
+    done < <(get services)
+    while read -r sv; do
+        [[ -n $sv ]] && ! get services | grep -qxF "$sv" && [[ -L $dir/$sv ]] && { rm -f "$dir/$sv"; say "Service off: $sv"; }
+    done < "$STATE/applied-services"
+    get services > "$STATE/applied-services"
+
+    # 7. single values
+    local v
+    v=$(get hostname); [[ -n $v && $v != "$(cat /etc/hostname 2>/dev/null)" ]] && { echo "$v" > /etc/hostname; hostname "$v" 2>/dev/null; say "Hostname: $v"; }
+    v=$(get timezone); [[ -n $v && -e /usr/share/zoneinfo/$v ]] && ln -sf "/usr/share/zoneinfo/$v" /etc/localtime
+    v=$(get keymap); [[ -n $v ]] && sed -i -E "s/^#?KEYMAP=.*/KEYMAP=$v/" /etc/rc.conf
+    v=$(get auto_update)
+    case $v in
+        off|no|"") [[ -L /var/service/grim-autoupdate ]] && rm -f /var/service/grim-autoupdate ;;
+        *) [[ -e /etc/runit/runsvdir/default/grim-autoupdate ]] || ln -s /etc/sv/grim-autoupdate /etc/runit/runsvdir/default/ ;;
+    esac
+    v=$(get boot)
+    case $v in lowram) cmd_boot lowram >/dev/null ;; desktop) cmd_boot desktop >/dev/null ;; esac
+    [[ $quiet == -q ]] || say "System matches $CONF"
+}
+
+# ------------------------------------------------------------ install / remove / search
+cmd_install() {
+    need_root install "$@"
+    (($#)) || die "usage: grimctl install PKG...  (@flatpak:ID or @src:NAME|URL for the others)"
+    local p
+    for p; do
+        case $p in
+            @flatpak:*|@src:*) list_add packages "$p" ;;
+            *) xbps-query -R "$p" >/dev/null 2>&1 || die "no Void package called $p (try: grimctl search $p)"
+               list_add packages "$p" ;;
+        esac
+    done
+    cmd_apply -q && say "Installed and added to $CONF: $*"
+}
+
+cmd_remove() {
+    need_root remove "$@"
+    (($#)) || die "usage: grimctl remove PKG..."
+    local p
+    for p; do list_del packages "$p"; grep -qxF "$p" "$STATE/applied-packages" 2>/dev/null || echo "$p" >> "$STATE/applied-packages"; done
+    cmd_apply -q && say "Removed: $*"
+}
+
+cmd_search() {
+    (($#)) || die "usage: grimctl search WORDS"
+    printf '%sVoid packages%s  (grimctl install NAME)\n' "$B" "$N"
+    xbps-query -Rs "$*" 2>/dev/null | sed -E 's/^\[.\] //' | head -40
+    if have flatpak; then
+        printf '\n%sFlathub%s  (grimctl install @flatpak:ID)\n' "$B" "$N"
+        flatpak search --columns=application,name "$*" 2>/dev/null | head -20
+    fi
+    if [[ -d $VPKG/srcpkgs ]]; then
+        printf '\n%sBuild from source%s  (grimctl build NAME)\n' "$B" "$N"
+        ls "$VPKG/srcpkgs" | grep -i -- "$1" | head -20
+    fi
+}
+
+# ------------------------------------------------------------ source builds (Grim's own way)
+# grimctl build NAME : builds a Void package from its recipe (void-packages) on this PC,
+#                      with -march=native, and installs it. Updates rebuild it.
+# grimctl build URL  : a git repository. Grim works out the build system (meson, cmake,
+#                      cargo, go, autotools, make), installs it into a staging folder, wraps
+#                      that as an xbps package ("NAME-src") so xbps can update and remove it.
+src_installed() { local n; n=$(src_name "$1"); installed "$n"; }
+src_name() {
+    case $1 in
+        http*://*|git@*) local b=${1%.git}; echo "${b##*/}-src" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+ensure_vpkg() {
+    if [[ ! -d $VPKG/.git ]]; then
+        say "Getting Void's package recipes (one-time, about 200 MB)..."
+        have git || xbps-install -Sy git
+        git clone --depth 1 https://github.com/void-linux/void-packages.git "$VPKG" || die "could not download void-packages"
+    fi
+    if [[ ! -d $VPKG/masterdir-$(xbps-uhelper arch) ]]; then
+        say "Setting up the build environment (one-time)..."
+        printf 'XBPS_ALLOW_RESTRICTED=yes\nXBPS_MAKEJOBS=%s\nXBPS_CFLAGS="-O2 -march=native -pipe"\nXBPS_CXXFLAGS="$XBPS_CFLAGS"\n' "$(nproc)" > "$VPKG/etc/conf"
+        (cd "$VPKG" && ./xbps-src -m "masterdir-$(xbps-uhelper arch)" binary-bootstrap) || die "build environment setup failed"
+    fi
+}
+
+build_one() {
+    local what=$1
+    case $what in
+        http*://*|git@*) build_git "$what" ;;
+        *) build_recipe "$what" ;;
+    esac && { grep -qxF "$what" "$STATE/applied-src" 2>/dev/null || echo "$what" >> "$STATE/applied-src"; }
+}
+
+build_recipe() {
+    local name=$1 md
+    ensure_vpkg
+    md="masterdir-$(xbps-uhelper arch)"
+    (cd "$VPKG" && git pull -q --depth 1 2>/dev/null; true)
+    [[ -f $VPKG/srcpkgs/$name/template ]] || die "Void has no recipe called $name (try: grimctl search $name)"
+    say "Building $name from source with -march=native (this can take a while)..."
+    (cd "$VPKG" && ./xbps-src -m "$md" -f pkg "$name") || die "build of $name failed"
+    xbps-install -fy --repository="$VPKG/hostdir/binpkgs" "$name" || die "install of $name failed"
+    xbps-pkgdb -m hold "$name" >/dev/null 2>&1   # keep the binary repo from replacing it
+    say "$name is built from source and installed. 'grimctl update' rebuilds it when Void's recipe changes."
+}
+
+build_git() {
+    local url=$1 name dir stage ver style
+    name=$(src_name "$url"); name=${name%-src}
+    dir=$SRC/$name; stage=$SRC/.stage-$name
+    have git || xbps-install -Sy git base-devel
+    mkdir -p "$SRC"
+    if [[ -d $dir/.git ]]; then git -C "$dir" pull -q || die "git pull failed"
+    else git clone --depth 1 "$url" "$dir" || die "could not clone $url"; fi
+    cd "$dir" || die "no $dir"
+    ver=$(git describe --tags --always 2>/dev/null | sed 's/^v//; s/[^0-9a-zA-Z.]/./g'); [[ $ver == [0-9]* ]] || ver="0.0.$(git rev-list --count HEAD)"
+    rm -rf "$stage"; mkdir -p "$stage"
+    export CFLAGS="-O2 -march=native -pipe" CXXFLAGS="-O2 -march=native -pipe"
+    if   [[ -f meson.build ]]; then style=meson
+         have meson || xbps-install -Sy meson ninja
+         meson setup build --prefix=/usr --buildtype=release --wipe >/dev/null 2>&1 || meson setup build --prefix=/usr --buildtype=release
+         ninja -C build && DESTDIR=$stage ninja -C build install
+    elif [[ -f CMakeLists.txt ]]; then style=cmake
+         have cmake || xbps-install -Sy cmake ninja
+         cmake -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release && ninja -C build && DESTDIR=$stage ninja -C build install
+    elif [[ -f Cargo.toml ]]; then style=cargo
+         have cargo || xbps-install -Sy cargo
+         cargo install --locked --path . --root "$stage/usr" || cargo install --path . --root "$stage/usr"
+         rm -f "$stage/usr/.crates.toml" "$stage/usr/.crates2.json"
+    elif [[ -f go.mod ]]; then style=go
+         have go || xbps-install -Sy go
+         mkdir -p "$stage/usr/bin" && go build -trimpath -o "$stage/usr/bin/$name" .
+    elif [[ -x configure || -f configure.ac || -f autogen.sh ]]; then style=autotools
+         [[ -x configure ]] || { [[ -x autogen.sh ]] && ./autogen.sh || autoreconf -fi; }
+         ./configure --prefix=/usr && make -j"$(nproc)" && make DESTDIR="$stage" install
+    elif [[ -f Makefile || -f makefile ]]; then style=make
+         make -j"$(nproc)" PREFIX=/usr && make PREFIX=/usr DESTDIR="$stage" install
+    else die "can't tell how to build $url (no meson, cmake, cargo, go, configure or Makefile)"; fi
+    [[ $? -eq 0 && -n $(ls -A "$stage" 2>/dev/null) ]] || die "build of $name failed ($style)"
+    # wrap it as a real xbps package so it updates and uninstalls cleanly
+    mkdir -p "$SRC/pkgs"
+    xbps-create -A "$(xbps-uhelper arch)" -n "$name-src-${ver}_1" -s "$name built from source by grimctl ($url)" \
+        -H "$url" -l "unknown" "$stage" >/dev/null && mv -f "$name-src-${ver}_1".*.xbps "$SRC/pkgs/" || die "packaging failed"
+    xbps-rindex -a "$SRC"/pkgs/*.xbps >/dev/null 2>&1
+    xbps-install -fy --repository="$SRC/pkgs" "$name-src" || die "install failed"
+    echo "$url" > "$SRC/$name.url"
+    rm -rf "$stage"
+    say "$name ($style, version $ver) is built and installed as the package $name-src."
+}
+
+src_remove() {
+    local n; n=$(src_name "$1")
+    installed "$n" && xbps-remove -Ry "$n" && say "Removed source build $n"
+    [[ $1 == *://* ]] && rm -rf "$SRC/${n%-src}" "$SRC/${n%-src}.url"
+}
+
+cmd_build() {
+    need_root build "$@"
+    (($#)) || die "usage: grimctl build NAME  (a Void recipe)   or   grimctl build URL  (any git repository)"
+    local what=$1
+    build_one "$what" || exit 1
+    list_add packages "@src:$what"
+}
+
+cmd_builds() {
+    printf '%sBuilt from source%s\n' "$B" "$N"
+    want_src | while read -r p; do printf '  %-40s %s\n' "$p" "$(src_installed "$p" && echo installed || echo 'not built yet')"; done
+}
+
+# ------------------------------------------------------------ update
+cmd_update() {
+    need_root update "$@"
+    say "Updating Void packages..."
+    xbps-install -Su xbps -y >/dev/null 2>&1
+    local yes=(); [[ ${1:-} == --auto ]] && yes=(-y)
+    xbps-install -Syu "${yes[@]}" || warn "the package update had problems"
+    if have flatpak && flatpak list --app 2>/dev/null | grep -q .; then say "Updating Flatpaks..."; flatpak update -y --noninteractive; fi
+    local p
+    while read -r p; do
+        [[ -z $p ]] && continue
+        say "Rebuilding $p from source..."
+        build_one "$p" || warn "rebuild of $p failed"
+    done < <(want_src)
+    cmd_apply -q
+    date +%s > "$STATE/last-update"
+    [[ -d /usr/lib/modules/$(uname -r) ]] || say "A new kernel is installed: reboot when it suits you."
+    say "Up to date."
+}
+
+# ------------------------------------------------------------ wallpaper
+cmd_wallpaper() {
+    local cfg=${XDG_CONFIG_HOME:-$HOME/.config}/grim
+    if [[ ${1:-} == set ]]; then
+        local f=${2:-}; [[ -n $f ]] || die "usage: grimctl wallpaper set FILE"
+        f=$(readlink -f -- "$f"); [[ -f $f ]] || die "no such file: $2"
+        mkdir -p "$cfg"; echo "$f" > "$cfg/wallpaper"
+        apply_wallpaper "$f" && say "Wallpaper set: $f"
+    elif [[ ${1:-} == "" || ${1:-} == show ]]; then
+        cat "$cfg/wallpaper" 2>/dev/null || echo "/usr/share/grim/wallpapers/default.png (default)"
+    elif [[ ${1:-} == apply ]]; then
+        apply_wallpaper "$(cat "$cfg/wallpaper" 2>/dev/null || echo /usr/share/grim/wallpapers/default.png)"
+    else die "usage: grimctl wallpaper [set FILE]"; fi
+}
+
+apply_wallpaper() {
+    local f=$1
+    if [[ -n ${WAYLAND_DISPLAY:-} ]]; then
+        pkill -x swaybg 2>/dev/null
+        (setsid swaybg -m fill -i "$f" >/dev/null 2>&1 &)
+    elif [[ -n ${DISPLAY:-} ]]; then
+        feh --no-fehbg --bg-fill "$f" || return 1
+    else
+        warn "no desktop is running: it will show next time you start one"
+    fi
+}
+
+# ------------------------------------------------------------ modes (runit runlevels)
+cmd_mode() {
+    case ${1:-} in
+        "") local cur; cur=$(basename "$(readlink -f /etc/runit/runsvdir/current)")
+            local used total; read -r total used < <(free -m | awk '/^Mem:/{print $2, $3}')
+            printf '\n  %sGrim Void%s  mode: %s%s%s   starts in: %s\n' "$B" "$N" "$R" "$([[ $cur == lowram ]] && echo lowram || echo desktop)" "$N" "$(get boot || echo desktop)"
+            printf '  RAM in use: %s%s MB%s of %s MB   services running: %s\n\n' "$B" "$used" "$N" "$total" "$(ls /etc/runit/runsvdir/current | wc -l)"
+            ps -eo rss=,comm= --sort=-rss | head -6 | awk '{printf "    %6.1f MB  %s\n", $1/1024, $2}'; echo ;;
+        lowram|low)
+            [[ -n ${WAYLAND_DISPLAY:-}${DISPLAY:-} ]] && { printf 'This stops the desktop and every service. Continue? [y/N] '; read -r a; [[ $a == [yY]* ]] || exit 1; }
+            as_root runsvchdir lowram >/dev/null && say "Low-RAM mode: only the console runs. Back: grimctl mode desktop" ;;
+        desktop|full)
+            as_root runsvchdir default >/dev/null && say "Everything is starting again." ;;
+        *) die "usage: grimctl mode [lowram|desktop]" ;;
+    esac
+}
+
+cmd_boot() {
+    need_root boot "$@"
+    case ${1:-} in
+        lowram) set_value boot lowram; grep -q '\blowram\b' /etc/default/grub || {
+                    sed -i -E 's/^(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*)"/\1 lowram"/' /etc/default/grub; grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1; }
+                say "Grim Void now starts in low-RAM mode. Back: grimctl boot desktop" ;;
+        desktop) set_value boot desktop; grep -q '\blowram\b' /etc/default/grub && {
+                    sed -i -E 's/ lowram//' /etc/default/grub; grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1; }
+                say "Grim Void starts as usual." ;;
+        *) die "usage: grimctl boot lowram|desktop" ;;
+    esac
+}
+
+# ------------------------------------------------------------ misc
+cmd_fetch() {
+    [[ ${1:-} == logo && ${2:-} =~ ^(void|reaper)$ ]] || die "usage: grimctl fetch logo void|reaper"
+    local f=${XDG_CONFIG_HOME:-$HOME/.config}/grimfetch/config.toml
+    mkdir -p "${f%/*}"; [[ -f $f ]] || cp /etc/grimfetch.toml "$f"
+    if grep -q '^logo' "$f"; then sed -i -E "s/^logo *=.*/logo = \"$2\"/" "$f"; else sed -i "1i logo = \"$2\"" "$f"; fi
+    say "grimfetch now shows the $2 logo."
+}
+
+cmd_zram() {
+    if [[ -e /sys/block/zram0/disksize ]] && swapon --show=NAME | grep -q zram0; then
+        zramctl 2>/dev/null || cat /proc/swaps
+        printf '\nswappiness %s, size from %s: zram = %s\n' "$(cat /proc/sys/vm/swappiness)" "$CONF" "$(get zram || echo 50%)"
+    else echo "zram is off (zram = off in $CONF, or the grim-zram service isn't running)"; fi
+}
+
+cmd_edit() {
+    need_root edit
+    "${EDITOR:-nano}" "$CONF" && cmd_apply
+}
+
+case ${1:-help} in
+    apply)     shift; cmd_apply "$@" ;;
+    edit)      shift; cmd_edit ;;
+    update|up) shift; cmd_update "$@" ;;
+    install|add)    shift; cmd_install "$@" ;;
+    remove|rm|del)  shift; cmd_remove "$@" ;;
+    search|s)  shift; cmd_search "$@" ;;
+    build)     shift; cmd_build "$@" ;;
+    builds)    cmd_builds ;;
+    wallpaper|wp) shift; cmd_wallpaper "$@" ;;
+    mode)      shift; cmd_mode "$@" ;;
+    boot)      shift; cmd_boot "$@" ;;
+    wifi)      shift; exec grim-wifi "$@" ;;
+    fetch)     shift; cmd_fetch "$@" ;;
+    zram)      cmd_zram ;;
+    get)       shift; get "${1:?usage: grimctl get KEY}" ;;
+    -h|--help|help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) die "unknown command: $1 (grimctl help)" ;;
+esac

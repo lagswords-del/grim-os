@@ -1,0 +1,4 @@
+#!/bin/sh
+grep -q '^/dev/zram0' /proc/swaps && swapoff /dev/zram0
+[ -e /sys/block/zram0/reset ] && echo 1 > /sys/block/zram0/reset
+exit 0

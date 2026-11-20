@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Prints the Grim OS banner. Used on the live ISO and on installed systems.
+art=/usr/share/grimos/ascii.txt
+[[ -r $art ]] || exit 0
+printf '\n\e[1;37m'
+cat "$art"
+printf '\e[0m\n'
+printf "   \e[1;97mG R I M   O S\e[0m \e[31m1.1.5\e[0m  \e[90m— %s\e[0m\n\n" "${1:-live}"

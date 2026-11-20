@@ -1,0 +1,13 @@
+#!/bin/sh
+# grim-volume: volume for the bars.
+#   grim-volume          "-13.31 dB" (Nord Snow bar), or "muted"
+#   grim-volume --icon   just a speaker icon that shows muted / low / high
+muted=no; pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | grep -q yes && muted=yes
+if [ "${1:-}" = "--icon" ]; then
+    [ $muted = yes ] && { printf '\357\200\246\n'; exit 0; }
+    pct=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -oE '[0-9]+%' | head -1 | tr -d %)
+    if [ "${pct:-0}" -lt 40 ]; then printf '\357\200\247\n'; else printf '\357\200\250\n'; fi
+    exit 0
+fi
+[ $muted = yes ] && { echo muted; exit 0; }
+pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -oE '[-0-9.inf]+ dB' | head -1 | sed 's/-inf dB/-∞ dB/' || echo "--"

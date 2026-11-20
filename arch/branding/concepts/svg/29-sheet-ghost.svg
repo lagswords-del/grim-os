@@ -1,0 +1,2 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" color="#0a0a0a" style="--bg:#f2f2f2"><defs><mask id="sg"><rect width="200" height="200" fill="#fff"/><ellipse cx="82" cy="88" rx="9" ry="13" fill="#000"/><ellipse cx="118" cy="88" rx="9" ry="13" fill="#000"/><ellipse cx="100" cy="118" rx="8" ry="6" fill="#000"/></mask></defs>
+<path mask="url(#sg)" d="M100 24 C64 24 44 52 44 86 V176 L62 162 L80 176 L100 162 L120 176 L138 162 L156 176 V86 C156 52 136 24 100 24 Z" fill="currentColor"/></svg>

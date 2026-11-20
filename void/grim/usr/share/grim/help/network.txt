@@ -1,0 +1,8 @@
+Network and Wi-Fi
+=================
+  grim-wifi              finds your Wi-Fi card, says if a driver or firmware is
+                         missing, lists networks by number and connects
+  grim-wifi --detect     only the hardware report
+  nmtui                  NetworkManager's own menus (VPNs, static IPs...)
+A cable connects by itself.
+Missing firmware? sudo grimctl install linux-firmware-network  (cable first)

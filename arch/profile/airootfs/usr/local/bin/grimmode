@@ -1,0 +1,58 @@
+#!/bin/bash
+# grimmode: switch Grim OS between the full desktop and low-RAM mode
+#   grimmode                  show the mode, RAM in use and the biggest programs
+#   grimmode lowram           stop the desktop and everything in the background now
+#   grimmode desktop          start everything again (login screen, network, ...)
+#   grimmode net              low-RAM mode, but with the network on
+#   grimmode boot lowram|desktop   what Grim OS starts in by default
+set -u
+R=$'\e[31m' B=$'\e[1;97m' G=$'\e[90m' N=$'\e[0m'
+LOW=grim-lowram.target
+
+as_root() { if ((EUID == 0)); then "$@"; else sudo "$@"; fi; }
+
+mode() {
+    if systemctl is-active -q "$LOW"; then echo lowram
+    elif systemctl is-active -q graphical.target; then echo desktop
+    else echo console; fi
+}
+
+default_target() {
+    # what the plain boot entry (or a reboot) starts in
+    local d; d=$(systemctl get-default 2>/dev/null)
+    case $d in "$LOW") echo lowram ;; graphical.target) echo desktop ;; *) echo "console (${d%.target})" ;; esac
+}
+
+status() {
+    local used total
+    read -r total used < <(free -m | awk '/^Mem:/{print $2, $3}')
+    printf '\n  %sGrim OS%s  mode: %s%s%s   starts in: %s\n' "$B" "$N" "$R" "$(mode)" "$N" "$(default_target)"
+    printf '  RAM in use: %s%s MB%s of %s MB\n\n' "$B" "$used" "$N" "$total"
+    printf '  %sBiggest programs%s\n' "$G" "$N"
+    ps -eo rss=,comm= --sort=-rss | head -8 | awk '{printf "    %6.1f MB  %s\n", $1/1024, $2}'
+    printf '\n  %srunning services: %s%s\n\n' "$G" "$(systemctl list-units --type=service --state=running --no-legend | wc -l)" "$N"
+    printf '  %sgrimmode lowram%s | %sdesktop%s | %snet%s | %sboot lowram%s/%sdesktop%s\n\n' "$R" "$N" "$R" "$N" "$R" "$N" "$R" "$N" "$R" "$N"
+}
+
+case ${1:-status} in
+    status|"") status ;;
+    lowram|low)
+        if [[ -n ${WAYLAND_DISPLAY:-}${DISPLAY:-} ]]; then
+            printf 'This closes the desktop and every open app. Save your work first.\nContinue? [y/N] '
+            read -r a; [[ $a == [yY]* ]] || exit 1
+        fi
+        as_root systemctl isolate "$LOW" ;;
+    desktop|full)
+        as_root systemctl isolate graphical.target ;;
+    net|network)
+        as_root systemctl start NetworkManager.service && {
+            echo "Network on. Wired connects by itself; for Wi-Fi run: nmtui"; } ;;
+    boot|default)
+        case ${2:-} in
+            lowram|low) as_root systemctl set-default "$LOW" && echo "Grim OS now starts in low-RAM mode. Back to normal: grimmode boot desktop" ;;
+            desktop|full) as_root systemctl set-default graphical.target && echo "Grim OS now starts the desktop as usual." ;;
+            *) echo "starts in: $(default_target)"; echo "usage: grimmode boot lowram|desktop"; exit 1 ;;
+        esac ;;
+    -h|--help|help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) echo "unknown: $1 (try grimmode --help)" >&2; exit 1 ;;
+esac

@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# grimupdate (also: update) - updates everything on Grim OS.
+#   update          ask before installing
+#   update --yes    don't ask
+#   update --mirrors   only pick the fastest mirrors again
+set -uo pipefail
+
+YES=(); MIRRORS_ONLY=0
+for a in "$@"; do case $a in -y|--yes) YES=(--noconfirm) ;; --mirrors) MIRRORS_ONLY=1 ;; esac; done
+AUR_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/grimos-aur
+as_root() { if ((EUID == 0)); then "$@"; else sudo "$@"; fi; }
+say() { printf '\n\e[1;97m:: %s\e[0m\n' "$*"; }
+
+if [[ -d /run/archiso ]]; then
+    echo "This is the live USB: updates would be lost on reboot. Install Grim OS first (griminstall)."
+    exit 1
+fi
+
+command -v grim-banner >/dev/null && grim-banner "update"
+
+# tell Grim Shell to count the updates again (its update icon watches this file)
+stamp() { mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/grimos" 2>/dev/null && date +%s >"${XDG_CACHE_HOME:-$HOME/.cache}/grimos/updated" 2>/dev/null; }
+trap stamp EXIT
+
+# Fastest mirrors: on request, or when the list is more than two weeks old
+pick_mirrors() {
+    command -v reflector >/dev/null || { echo "   reflector isn't installed (sudo pacman -S reflector)."; return 1; }
+    say "Finding the fastest mirrors (takes up to a minute)"
+    as_root cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak
+    if as_root reflector @/etc/xdg/reflector/reflector.conf --save /etc/pacman.d/mirrorlist.new 2>/dev/null \
+       || as_root reflector --protocol https --latest 20 --fastest 10 --sort rate --save /etc/pacman.d/mirrorlist.new; then
+        if grep -q '^Server' /etc/pacman.d/mirrorlist.new; then
+            as_root mv /etc/pacman.d/mirrorlist.new /etc/pacman.d/mirrorlist
+            grep '^Server' /etc/pacman.d/mirrorlist | head -3 | sed 's/^Server = /   /'
+            return 0
+        fi
+    fi
+    as_root rm -f /etc/pacman.d/mirrorlist.new
+    echo "   Couldn't test mirrors (no internet?). Kept your old list."
+}
+if ((MIRRORS_ONLY)); then pick_mirrors; exit; fi
+if [[ -n $(find /etc/pacman.d/mirrorlist -mtime +14 2>/dev/null) ]]; then pick_mirrors; fi
+kernels() { pacman -Q linux linux-zen linux-lts linux-grim 2>/dev/null; }   # whichever kernel(s) you have
+kernel_before=$(kernels)
+
+say "Updating signing keys"
+as_root pacman -Sy --needed "${YES[@]}" archlinux-keyring || { echo "Could not reach the package servers. Check your internet."; exit 1; }
+
+say "Updating system packages"
+as_root pacman -Su "${YES[@]}" || { echo "System update failed (see above)."; exit 1; }
+
+# AUR apps installed through grimhelp
+mapfile -t foreign < <(pacman -Qqm 2>/dev/null)
+if ((${#foreign[@]})) && ((EUID != 0)); then
+    say "Checking AUR apps: ${foreign[*]}"
+    q=$(printf '&arg[]=%s' "${foreign[@]}")
+    info=$(curl -fsS --max-time 15 "https://aur.archlinux.org/rpc/v5/info?${q:1}" 2>/dev/null)
+    if [[ -n $info ]]; then
+        while read -r name ver; do
+            [[ -z $name ]] && continue
+            have=$(pacman -Q "$name" | awk '{print $2}')
+            if [[ $(vercmp "$ver" "$have") -gt 0 ]]; then
+                echo "   $name $have -> $ver"
+                if [[ -d $AUR_DIR/$name/.git ]]; then git -C "$AUR_DIR/$name" pull -q --ff-only
+                else git clone -q "https://aur.archlinux.org/$name.git" "$AUR_DIR/$name"; fi
+                (cd "$AUR_DIR/$name" && makepkg -si --needed "${YES[@]}") || echo "   !! $name failed to update"
+            fi
+        done < <(grep -oE '"(Name|Version)":"[^"]*"' <<<"$info" | cut -d'"' -f4 | paste -d' ' - -)
+        echo "   AUR apps are up to date."
+    else
+        echo "   Could not reach the AUR, skipped."
+    fi
+elif ((${#foreign[@]})); then
+    say "AUR apps are skipped when update runs as root; run it as your normal user."
+fi
+
+# ---------------------------------------------------------------- package list (NixOS style)
+# /etc/grimos/packages.conf is the list of your apps. On every update:
+#   lines you deleted          -> uninstalled
+#   names you added            -> installed (repo or AUR)
+#   apps you removed by hand   -> taken off the list
+#   apps you installed by hand -> added to the list (with pacman, Shelly, grimhelp...)
+CONF=/etc/grimos/packages.conf
+BASE=/var/lib/grimos/baseline
+SYNCED=/var/lib/grimos/synced
+
+aur_build() {
+    local name=$1
+    ((EUID == 0)) && { echo "   !! $name is an AUR app: run update as your normal user to build it"; return 1; }
+    as_root pacman -S --needed --noconfirm base-devel git >/dev/null || return 1
+    mkdir -p "$AUR_DIR"
+    if [[ -d $AUR_DIR/$name/.git ]]; then git -C "$AUR_DIR/$name" pull -q --ff-only
+    else git clone -q "https://aur.archlinux.org/$name.git" "$AUR_DIR/$name" || return 1; fi
+    (cd "$AUR_DIR/$name" && makepkg -si --needed --noconfirm)
+}
+
+sync_pkglist() {
+    [[ -f $CONF ]] || return 0
+    say "Syncing your package list ($CONF)"
+    local -A want=() aur=() prev=() base=() all=() expl=() foreign=()
+    local line name
+    while IFS= read -r line; do
+        name=${line%%#*}; name=${name//[[:space:]]/}
+        [[ -z $name ]] && continue
+        want[$name]=1
+        [[ $line == *"# aur"* ]] && aur[$name]=1
+    done <"$CONF"
+    [[ -f $SYNCED ]] && while read -r name; do [[ -n $name ]] && prev[$name]=1; done <"$SYNCED"
+    [[ -f $BASE ]] && while read -r name; do [[ -n $name ]] && base[$name]=1; done <"$BASE"
+    while read -r name; do all[$name]=1; done < <(pacman -Qq)
+    while read -r name; do expl[$name]=1; done < <(pacman -Qqe)
+    while read -r name; do foreign[$name]=1; done < <(pacman -Qqm)
+
+    local -a remove=() install_repo=() install_aur=() dropped=() added=()
+    for name in "${!prev[@]}"; do
+        if [[ -z ${want[$name]:-} ]]; then
+            [[ -n ${all[$name]:-} ]] && remove+=("$name")           # deleted from the file
+        elif [[ -z ${all[$name]:-} ]]; then
+            dropped+=("$name")                                       # uninstalled by hand
+        fi
+    done
+    for name in "${!want[@]}"; do
+        [[ -n ${prev[$name]:-} || -n ${all[$name]:-} ]] && continue  # already there
+        if [[ -n ${aur[$name]:-} ]]; then install_aur+=("$name"); else install_repo+=("$name"); fi
+    done
+    for name in "${!expl[@]}"; do
+        [[ -n ${want[$name]:-} || -n ${base[$name]:-} || -n ${prev[$name]:-} ]] && continue
+        added+=("$name")                                             # installed by hand
+    done
+
+    if ((${#remove[@]})); then
+        echo "   Uninstalling (deleted from the list): ${remove[*]}"
+        as_root pacman -Rns --noconfirm "${remove[@]}" || echo "   !! Some apps could not be removed (another package may need them)"
+    fi
+    if ((${#install_repo[@]})); then
+        echo "   Installing (added to the list): ${install_repo[*]}"
+        as_root pacman -S --needed --noconfirm "${install_repo[@]}" && as_root pacman -D --asexplicit "${install_repo[@]}" >/dev/null \
+            || echo "   !! Some names were not found. Check the spelling in $CONF (AUR apps need '# aur')."
+    fi
+    for name in "${install_aur[@]}"; do
+        echo "   Building from the AUR: $name"
+        aur_build "$name" || echo "   !! $name could not be built"
+    done
+
+    # Rewrite the file: keep the user's lines and comments, drop removed-by-hand apps, add new ones
+    local tmp; tmp=$(mktemp)
+    while IFS= read -r line; do
+        name=${line%%#*}; name=${name//[[:space:]]/}
+        if [[ -n $name && " ${dropped[*]} " == *" $name "* ]]; then continue; fi
+        printf '%s\n' "$line"
+    done <"$CONF" >"$tmp"
+    if ((${#added[@]})); then
+        printf '\n# Added by update on %s\n' "$(date +%F)" >>"$tmp"
+        for name in $(printf '%s\n' "${added[@]}" | sort); do
+            if [[ -n ${foreign[$name]:-} ]]; then echo "$name # aur"; else echo "$name"; fi
+        done >>"$tmp"
+        echo "   Added to the list (installed by hand): ${added[*]}"
+    fi
+    ((${#dropped[@]})) && echo "   Taken off the list (uninstalled by hand): ${dropped[*]}"
+    as_root install -m644 "$tmp" "$CONF"
+
+    # Remember what the list held, for next time
+    local stmp; stmp=$(mktemp)
+    while IFS= read -r line; do
+        name=${line%%#*}; name=${name//[[:space:]]/}
+        [[ -n $name ]] && pacman -Qq "$name" &>/dev/null && echo "$name"
+    done <"$CONF" | sort -u >"$stmp"
+    as_root install -Dm644 "$stmp" "$SYNCED"
+    rm -f "$tmp" "$stmp"
+    echo "   Package list is in sync."
+}
+sync_pkglist
+
+if command -v flatpak >/dev/null; then
+    say "Updating Flatpak apps"
+    flatpak update "${YES[@]/--noconfirm/-y}"
+fi
+
+pacnew=$(find /etc -name '*.pacnew' 2>/dev/null)
+[[ -n $pacnew ]] && { say "New default config files were saved next to yours:"; echo "$pacnew" | sed 's/^/   /'; echo "   Compare them when you have time (e.g. with: diff old new)."; }
+
+say "Done."
+if [[ $(kernels) != "$kernel_before" ]]; then
+    echo "   The kernel was updated: reboot to start using it."
+fi
+orph=$(pacman -Qtdq 2>/dev/null | wc -l)
+((orph > 0)) && echo "   $orph package(s) aren't needed any more. Remove them with:  sudo pacman -Rns \$(pacman -Qtdq)"

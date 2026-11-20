@@ -1,0 +1,9 @@
+#!/bin/sh
+# grim-tty-session: the "No desktop (terminal)" choice on the login screen (F3).
+# A plain text login with the Grim OS banner. Type 'exit' to go back to the login screen.
+export XDG_SESSION_TYPE=tty XDG_CURRENT_DESKTOP= XDG_SESSION_DESKTOP=
+clear
+grim-banner "$(uname -r | sed s/arch/grim/)" 2>/dev/null
+printf '   No desktop. Type \033[1mexit\033[0m to go back to the login screen, \033[1mgrimhelp\033[0m for help.\n\n'
+export GRIM_BANNER_SHOWN=1
+exec "${SHELL:-/bin/bash}" -l

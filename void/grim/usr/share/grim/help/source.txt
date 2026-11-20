@@ -1,0 +1,15 @@
+Building from source (Grim's way)
+=================================
+  sudo grimctl build NAME     compile a Void package on this PC, tuned for your CPU
+                              (-march=native). Uses Void's own recipes (void-packages).
+  sudo grimctl build URL      compile any git project. Grim works out the build system
+                              (meson, cmake, cargo, go, autotools, make), installs it to a
+                              staging folder and wraps it as a real xbps package called
+                              NAME-src, so xbps can update or remove it like any other.
+  grimctl builds              list your source builds
+  sudo grimctl update         also rebuilds them when there's something new
+  sudo grimctl remove @src:NAME
+
+The first build downloads Void's recipes (about 200 MB) and sets up a clean build
+environment in /var/lib/grim. Builds go in /var/lib/grim/src.
+grimhelp > Search lets you pick "compile from source" for any result.

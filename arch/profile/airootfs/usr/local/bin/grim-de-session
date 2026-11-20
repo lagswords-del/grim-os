@@ -1,0 +1,7 @@
+#!/bin/sh
+# Grim DE: started by the login screen ("Grim" in the F3 session list).
+export XDG_CURRENT_DESKTOP=Grim:niri XDG_SESSION_DESKTOP=grim XDG_SESSION_TYPE=wayland
+cfg="${XDG_CONFIG_HOME:-$HOME/.config}/grim-de"
+grim-de apply >/dev/null 2>&1
+export NIRI_CONFIG="$cfg/niri/config.kdl"
+exec niri --session

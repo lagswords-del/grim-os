@@ -1,0 +1,41 @@
+#!/bin/sh
+# Grim Void: river
+riverctl map normal Super Return spawn grim-term
+riverctl map normal Super Q close
+riverctl map normal Super F toggle-fullscreen
+riverctl map normal Super T toggle-float
+riverctl map normal Super D spawn fuzzel
+riverctl map normal Super W spawn 'grim-term -e grim-wifi'
+riverctl map normal Super+Shift E exit
+riverctl map normal Super J focus-view next
+riverctl map normal Super K focus-view previous
+riverctl map normal Super+Shift J swap next
+riverctl map normal Super+Shift K swap previous
+riverctl map normal Super H send-layout-cmd rivertile "main-ratio -0.05"
+riverctl map normal Super L send-layout-cmd rivertile "main-ratio +0.05"
+riverctl map-pointer normal Super BTN_LEFT move-view
+riverctl map-pointer normal Super BTN_RIGHT resize-view
+for i in 1 2 3 4 5 6 7 8 9; do
+    tags=$((1 << (i - 1)))
+    riverctl map normal Super $i set-focused-tags $tags
+    riverctl map normal Super+Shift $i set-view-tags $tags
+done
+riverctl map normal None Print spawn 'sh -c "mkdir -p ~/Pictures && grim ~/Pictures/shot-$(date +%s).png"'
+riverctl map normal None XF86AudioRaiseVolume spawn 'wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+'
+riverctl map normal None XF86AudioLowerVolume spawn 'wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-'
+riverctl map normal None XF86AudioMute spawn 'wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle'
+riverctl map normal None XF86MonBrightnessUp spawn 'brightnessctl set 5%+'
+riverctl map normal None XF86MonBrightnessDown spawn 'brightnessctl set 5%-'
+riverctl background-color 0x0a0a0a
+riverctl border-color-focused 0xc1121f
+riverctl border-color-unfocused 0x2a2a2a
+riverctl border-width 2
+riverctl set-repeat 40 300
+riverctl keyboard-layout us
+riverctl input '*' tap enabled
+riverctl spawn pipewire
+riverctl spawn waybar
+riverctl spawn mako
+riverctl spawn 'grimctl wallpaper apply'
+riverctl default-layout rivertile
+exec rivertile -view-padding 4 -outer-padding 6

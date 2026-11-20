@@ -1,0 +1,7 @@
+font=Inconsolata 11
+background-color=#0a0a0a
+text-color=#e8e8e8
+border-color=#c1121f
+border-size=2
+border-radius=6
+default-timeout=6000

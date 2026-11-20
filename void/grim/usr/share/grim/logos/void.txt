@@ -1,0 +1,18 @@
+${c1}                  __.;=====;.__
+${c1}              _.=+==++=++=+=+===;.
+${c1}               -=+++=+===+=+=+++++=_
+${c1}          .     -=:``     `--==+=++==.
+         ${c2}_vi,${c1}    `            --+=++++:
+        ${c2}.uvnvi.${c1}       _._       -==+==+.
+       ${c2}.vvnvnI`${c1}    .;==|==;.     :|=||=|.
+${c1}  +  .QQWQ$QQ.  QWQQmQQW.   WmQ  QQmQ.   .QWmQ
+${c1}   - QWQ$'    `  QmQ   $QQ   QWQ  QQWQ$. .mQQWQ
+${c1}    - $QQ   QWQQ  QWQ$QQW'    QmQ  Q$Q WmQQW QmQ
+${c1}     - `mQQWQQm'   $QQ   `WQQ  QWQ  QWm  `Q'  QWQ
+       ${c2}-1vvnvv.${c1}                         ++|+++
+        ${c2}+vnvnnv,${c1}                 `-|===
+         ${c2}+vnvnvns.           .${c1}      :=-
+          ${c2}-Invnvvnsi..___..=sv=.${c1}     `
+            ${c2}+Invnvnvnnnnnnnnvvnn;.
+              ${c2}~|Invnvnvvnvvvnnv}+`
+                  ${c2}-~|{*l}*|~

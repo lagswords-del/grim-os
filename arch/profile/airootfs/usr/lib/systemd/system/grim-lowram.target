@@ -1,0 +1,12 @@
+# Grim OS low-RAM mode: a text console and nothing else.
+# No desktop, no login screen, no network, no Bluetooth, no printing.
+# Booted from the "Low RAM" boot menu entry (systemd.unit=grim-lowram.target),
+# or switched to with:  grimmode lowram
+[Unit]
+Description=Grim OS low-RAM mode (text console, no desktop)
+Documentation=man:systemd.special(7)
+Requires=basic.target
+Wants=getty.target getty@tty1.service
+Conflicts=rescue.service rescue.target
+After=basic.target rescue.service rescue.target
+AllowIsolate=yes

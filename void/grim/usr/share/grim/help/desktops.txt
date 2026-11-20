@@ -1,0 +1,16 @@
+Desktops
+========
+Grim Void has no login screen: log in on tty1 and your desktop starts
+("desktop =" in /etc/grim/system.conf, or grimhelp > Desktop at login).
+
+  IceWM     light, with a taskbar and start menu (X11)
+  Niri      scrolling tiling, Waybar on top (Wayland)
+  Openbox   floating, right-click the desktop for a menu (X11)
+  i3        tiling with a bar (X11)
+  dwm       tiny tiling, status on the right (X11)
+  river     tiling, Waybar on top (Wayland)
+
+  grim-session            pick one now
+  grim-session i3         start that one
+  grimctl wallpaper set ~/Pictures/wall.png     the wallpaper, on any of them
+Keys: grimhelp keys

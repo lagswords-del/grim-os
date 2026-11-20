@@ -1,0 +1,33 @@
+# Grim OS GRUB theme
+desktop-image: "background.png"
+desktop-image-scale-method: "stretch"
+desktop-color: "#f2f2f2"
+title-text: ""
+terminal-box: "select_*.png"
+
++ boot_menu {
+    left = 22%
+    top = 60%
+    width = 56%
+    height = 28%
+    item_font = "Unifont Regular 16"
+    item_color = "#0a0a0a"
+    selected_item_font = "Unifont Regular 16"
+    selected_item_color = "#f2f2f2"
+    selected_item_pixmap_style = "select_*.png"
+    item_height = 28
+    item_padding = 8
+    item_spacing = 4
+    scrollbar = false
+}
+
++ label {
+    id = "__timeout__"
+    left = 0
+    top = 92%
+    width = 100%
+    align = "center"
+    color = "#555555"
+    font = "Unifont Regular 16"
+    text = "Booting in %d seconds"
+}

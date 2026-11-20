@@ -1,0 +1,32 @@
+{
+  "name": "Nord Snow",
+  "description": "Cold blue-grey with a cyan outline, from the author's i3 setup.",
+  "order": 2,
+  "dark": true,
+  "colors": {
+    "bg": "#2e3440",
+    "bg2": "#2e3440",
+    "bg3": "#3b4252",
+    "fg": "#d8dee9",
+    "muted": "#7b88a1",
+    "accent": "#88c0d0",
+    "accent_fg": "#2e3440",
+    "accent2": "#b48ead",
+    "urgent": "#bf616a",
+    "border_active": "#88c0d0",
+    "border_inactive": "#3b4252"
+  },
+  "font": "Inconsolata Nerd Font Mono",
+  "font_size": 12,
+  "wallpaper": "nord-snow.jpg",
+  "gaps": 10,
+  "border": 2,
+  "radius": 0,
+  "dock": false,
+  "bar_position": "top",
+  "gtk_theme": "Adwaita-dark",
+  "icon_theme": "Papirus-Dark",
+  "gnome_accent": "slate",
+  "kde_scheme": "BreezeDark",
+  "bar_style": "classic"
+}

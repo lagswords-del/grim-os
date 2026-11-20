@@ -1,0 +1,21 @@
+GETTING STARTED
+
+Grim OS is built on Arch Linux. Anything you read on the Arch Wiki
+(wiki.archlinux.org) works here too.
+
+Handy commands
+  grimhelp        this help, plus a list of apps to install
+  update          update everything (same as grimupdate)
+  grimfetch       show system info with the Grim OS logo
+  grimfetch --live   the same, with live CPU, memory, temperature and network (q quits)
+  grimsettings    rices, bar, dock and shortcuts (Super+F1)
+  grimsettings tui   the same settings in the terminal
+  nmtui           connect to Wi-Fi or other networks
+  sudo <command>  run a command as admin (asks for your password)
+
+On the live USB
+  griminstall     install Grim OS to a disk
+  iwctl           connect to Wi-Fi before installing
+
+Your files live in /home/<your name>. Settings for most apps are
+in ~/.config.

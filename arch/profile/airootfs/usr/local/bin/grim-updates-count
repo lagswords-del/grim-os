@@ -1,0 +1,4 @@
+#!/bin/sh
+# grim-updates-count: how many updates are waiting (for the bar). Empty when there are none.
+n=$(checkupdates 2>/dev/null | wc -l)
+[ "$n" -gt 0 ] && printf '\357\200\241 %s\n' "$n" || echo ""
