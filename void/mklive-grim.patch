@@ -463,6 +463,37 @@ index 68d94b2..d34fdbd 100644
  
  # Enable sudo permission by default.
  if [ -f ${NEWROOT}/etc/sudoers ]; then
+diff --git a/grub/grub.cfg b/grub/grub.cfg
+index c5ab087..83f6eb7 100644
+--- a/grub/grub.cfg
++++ b/grub/grub.cfg
+@@ -11,5 +11,25 @@ insmod ntfs
+ insmod hfsplus
+ insmod linux
+ insmod chain
+-search --file --no-floppy --set=voidlive "/boot/grub/grub_void.cfg"
++insmod regexp
++insmod test
++# Grim: find the USB. By its label first (memdisk, Ventoy's RAM disk inside the boot loader,
++# can also hold boot/grub/grub_void.cfg but has no label), then by file, skipping memdisk.
++search --no-floppy --label --set=voidlive VOID_LIVE
++if [ -z "$voidlive" -o ! -f "(${voidlive})/boot/grub/grub_void.cfg" ]; then
++    unset voidlive
++    for dev in (*); do
++        regexp --set=name '^\((.*)\)$' "$dev"
++        if [ "$name" = memdisk ]; then continue; fi
++        if [ -f "${dev}/boot/grub/grub_void.cfg" -a -f "${dev}/LiveOS/squashfs.img" ]; then
++            set voidlive="$name"
++            break
++        fi
++    done
++fi
++if [ -z "$voidlive" ]; then
++    echo "Grim Void: couldn't find this USB's files."
++    echo "Type  ls  to list the disks, then:  configfile (DISK)/boot/grub/grub_void.cfg"
++    sleep 20
++fi
+ source "(${voidlive})/boot/grub/grub_void.cfg"
 diff --git a/grub/grub_void.cfg.pre b/grub/grub_void.cfg.pre
 index dc59be7..f674a60 100644
 --- a/grub/grub_void.cfg.pre
