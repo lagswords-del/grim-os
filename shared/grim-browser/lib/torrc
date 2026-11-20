@@ -1,0 +1,8 @@
+# Grim Browser's own Tor (only for private windows)
+SocksPort 127.0.0.1:9150 IsolateSOCKSAuth IsolateDestAddr
+ControlPort 127.0.0.1:9151
+CookieAuthentication 1
+DataDirectory @DATA@
+AvoidDiskWrites 1
+ClientOnly 1
+Log notice file @DATA@/tor.log

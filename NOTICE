@@ -19,3 +19,10 @@ void/branding/make-logo.py    Draws "GRIM" with Noto Sans Black Italic (SIL Open
 
 Void Linux and Arch Linux are trademarks of their owners. Grim OS is not affiliated with
 or endorsed by either project.
+shared/grim-browser/branding/ Grim Browser's icon is Iceraven's launcher icon (MPL-2.0,
+                              github.com/fork-maintainers/iceraven-browser) recoloured; see
+                              shared/grim-browser/LICENSE-ICON.
+shared/grim-browser/          Runs on Firefox (MPL-2.0, Mozilla). Grim Browser is not affiliated
+                              with Mozilla; Firefox is a trademark of the Mozilla Foundation.
+                              Block lists are downloaded at run time from easylist.to (CC BY-SA 3.0
+                              / GPL-3.0) and pgl.yoyo.org; they are not included here.

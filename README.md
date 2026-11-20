@@ -23,6 +23,7 @@ Both editions install **offline** from the USB or **online**, have a **Low RAM**
 - **`grim-spotify`**: Spotify in the terminal with lyrics, cover art and playlists (built on spotify-player; needs Spotify Premium).
 - **Quick settings** in grimhelp: Wi-Fi, Bluetooth, volume, brightness, do-not-disturb, night light, DNS, battery charge limit, updates, zram, keyboard, time zone.
 - **`grimctl disk | clean | ram | battery | net`**: disk space and health, one-command clean-up, memory and zram savings, battery health and charge limit, network info, speed test and DNS switching.
+- **Grim Browser** (`shared/grim-browser`): Firefox with no telemetry or data to any company, fingerprinting protection, and the Grim Shield extension: an ad and tracker blocker (EasyList, EasyPrivacy, Peter Lowe's list), private windows routed through Tor, a one-click Burn (cookies, history, site data, new Tor identity), themes with transparency, several private search engines, a welcome animation. Plus `grim-search` for searching from a terminal or a search box. Icon: Iceraven's, recoloured (MPL-2.0).
 - **Grim apps** (installed from grimhelp): **Grim Shot** for screenshots, recordings and GIFs on X11 and Wayland (Super+Shift+S), and **grim-ai**, a local AI chat with the Grim face, running llama.cpp on your PC or Ollama on another computer.
 - The same keys on every desktop: Super+Enter terminal, Super+Q close, Super+F fullscreen, Super+T floating, Super+D launcher.
 

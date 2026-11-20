@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Welcome to Grim Browser</title><link rel="stylesheet" href="grim.css">
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  h1 { font-size: clamp(32px, 6vw, 72px); font-weight: 900; margin: 0; letter-spacing: -0.02em; white-space: nowrap;
+       opacity: 0; animation: rise .9s ease-out .3s forwards; }
+  #word { display: inline-block; color: var(--red2); min-width: 4.6em; text-align: center; }
+  #word.flick { animation: flick .14s steps(2) 2; }
+  @keyframes flick { 0% { opacity: 1; filter: none; } 50% { opacity: .15; filter: blur(2px); } 100% { opacity: 1; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+  img { width: 88px; height: 88px; margin-bottom: 28px; opacity: 0; animation: rise .9s ease-out forwards; }
+  .after { margin-top: 44px; opacity: 0; transition: opacity 1s; display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .after.show { opacity: 1; }
+  .after p { margin: 0; max-width: 560px; text-align: center; }
+  .row { display: flex; gap: 10px; }
+</style></head>
+<body>
+  <img src="icons/128.png" alt="">
+  <h1>Welcome to a <span id="word">Private</span> internet</h1>
+  <div class="after" id="after">
+    <p class="dim">No telemetry. Ads and trackers blocked. Private windows go through Tor. Fingerprinting protection on.</p>
+    <div class="row"><button class="red" id="go">Start browsing</button><button id="set">Settings</button></div>
+  </div>
+  <script src="welcome.js"></script>
+</body></html>

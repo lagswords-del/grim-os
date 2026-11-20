@@ -1,0 +1,16 @@
+# Template file for 'grim-browser'
+# Grim Browser: Firefox with Grim's privacy settings, the Grim Shield extension (ad/tracker blocker,
+# Tor for private windows, burn button, settings), grim-search, and a private Tor for the browser.
+# build.sh runs shared/grim-browser/install.sh into files/root.
+pkgname=grim-browser
+version=1.0.0
+revision=1
+depends="firefox tor python3 curl"
+short_desc="Grim Browser: private Firefox with Tor private windows, ad/tracker blocking and no telemetry"
+maintainer="Grim OS <grimos@localhost>"
+license="MIT, MPL-2.0"
+homepage="https://github.com/lagswords-del/grim-os"
+
+do_install() {
+	cp -a ${FILESDIR}/root/. ${DESTDIR}/
+}

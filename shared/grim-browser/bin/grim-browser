@@ -1,0 +1,35 @@
+#!/bin/bash
+# grim-browser: Firefox with Grim's privacy settings, the Grim Shield extension and Tor for private windows.
+#   grim-browser [URL...]          open (a URL)
+#   grim-browser --private [URL]   a private window (through Tor)
+#   grim-browser --reset           start over with a fresh Grim profile (your bookmarks go too)
+set -u
+LIB=/usr/lib/grim-browser
+DATA=${XDG_DATA_HOME:-$HOME/.local/share}/grim-browser
+PROFILE=$DATA/profile
+TORDIR=$DATA/tor
+FIREFOX=$(command -v firefox || echo /usr/lib/firefox/firefox)
+
+if [[ ${1:-} == --reset ]]; then
+    read -rp "Delete the Grim profile (history, bookmarks, logins, settings)? [y/N] " a
+    [[ $a == [yY]* ]] && rm -rf "$PROFILE" && echo "Done. The next start is a fresh one."
+    exit 0
+fi
+
+mkdir -p "$PROFILE/chrome" "$TORDIR"
+chmod 700 "$DATA" "$TORDIR"
+# Grim's settings go in on every start (so updates reach you); user-overrides.js is yours to add to
+cat "$LIB/user.js" > "$PROFILE/user.js"
+[[ -f $PROFILE/user-overrides.js ]] && cat "$PROFILE/user-overrides.js" >> "$PROFILE/user.js"
+[[ -f $PROFILE/chrome/userChrome.css ]] || cp "$LIB/userChrome.css" "$PROFILE/chrome/userChrome.css"
+
+# Tor for private windows: a private Tor just for the browser (no root needed), on 9150/9151
+tor_up() { (exec 3<>/dev/tcp/127.0.0.1/9150) 2>/dev/null; }
+if command -v tor >/dev/null && ! tor_up; then
+    sed "s|@DATA@|$TORDIR|g" "$LIB/torrc" > "$TORDIR/torrc"
+    setsid tor -f "$TORDIR/torrc" >/dev/null 2>&1 < /dev/null &
+fi
+
+args=()
+if [[ ${1:-} == --private ]]; then shift; args+=(--private-window "${1:-about:blank}"); shift || true; fi
+exec "$FIREFOX" --profile "$PROFILE" --name grim-browser --class grim-browser "${args[@]}" "$@"

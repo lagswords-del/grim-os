@@ -1,0 +1,7 @@
+/* Grim Shield: hides the empty boxes ads leave behind (only selectors that are always ads) */
+ins.adsbygoogle, .adsbygoogle, [id^="google_ads_iframe"], [id^="div-gpt-ad"], div[id^="taboola-"],
+.taboola, #taboola-below-article-thumbnails, .OUTBRAIN, [data-widget-id^="outbrain"], .trc_rbox_container,
+iframe[src*="doubleclick.net"], iframe[src*="googlesyndication.com"], iframe[src*="amazon-adsystem.com"],
+a[href*="doubleclick.net/"], div[aria-label="Advertisement"], .ad-slot, .ad-container[data-ad-slot] {
+  display: none !important;
+}

@@ -1,0 +1,12 @@
+Grim Browser's icon (branding/grim-browser.svg and the PNGs made from it) is Iceraven's launcher icon
+(https://github.com/fork-maintainers/iceraven-browser, app/src/forkRelease/res/drawable-v24/
+ic_launcher_foreground.xml), converted to SVG and recoloured from blue to red by branding/make-icon.py.
+
+Iceraven is licensed under the Mozilla Public License 2.0, and so is this modified icon:
+
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+The source of the original (iceraven-launcher-foreground.xml) is kept next to it in branding/.
+Grim Browser is not affiliated with Iceraven or Mozilla.

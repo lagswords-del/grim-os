@@ -208,7 +208,7 @@ cmd_install() {
     local p
     for p; do
         case $p in
-            grim-shot|grim-ai)
+            grim-shot|grim-ai|grim-browser)
                 [[ ${GRIM_HELP:-} == 1 ]] || die "$p is installed from grimhelp: run grimhelp, then Install apps > Grim apps"
                 list_add packages "$p" ;;
             @flatpak:*|@src:*) list_add packages "$p" ;;

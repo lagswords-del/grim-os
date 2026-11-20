@@ -12,4 +12,4 @@ Grim Void is Grim OS built on Void Linux: musl, runit, xbps, and Grim's own tool
 Your whole system is described in one file:  /etc/grim/system.conf
 Edit it and run "sudo grimctl apply". See: grimhelp system
 
-Pages: start, system, apps, source, desktops, keys, lowram, spotify, network, tools, shot, ai
+Pages: start, system, apps, source, desktops, keys, lowram, spotify, network, tools, shot, ai, browser

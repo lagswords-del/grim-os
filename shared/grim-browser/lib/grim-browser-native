@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Grim Browser's helper: lets Grim Shield talk to the browser's Tor (status, new identity).
+Firefox starts it through native messaging; it only accepts these commands."""
+import json, os, socket, struct, sys
+
+DATA = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "grim-browser", "tor")
+
+def read():
+    raw = sys.stdin.buffer.read(4)
+    if len(raw) < 4:
+        return None
+    return json.loads(sys.stdin.buffer.read(struct.unpack("@I", raw)[0]))
+
+def send(obj):
+    data = json.dumps(obj).encode()
+    sys.stdout.buffer.write(struct.pack("@I", len(data)) + data)
+    sys.stdout.buffer.flush()
+
+def control(*commands):
+    cookie = open(os.path.join(DATA, "control_auth_cookie"), "rb").read().hex()
+    with socket.create_connection(("127.0.0.1", 9151), timeout=5) as s:
+        f = s.makefile("rwb")
+        out = []
+        for c in ("AUTHENTICATE " + cookie,) + commands:
+            f.write((c + "\r\n").encode()); f.flush()
+            lines = []
+            while True:
+                line = f.readline().decode().rstrip("\r\n")
+                lines.append(line)
+                if len(line) < 4 or line[3] == " ":
+                    break
+            if not lines[-1].startswith("250"):
+                raise RuntimeError(lines[-1])
+            out.append(lines)
+        return out[1:]
+
+def main():
+    msg = read() or {}
+    cmd = msg.get("cmd")
+    try:
+        if cmd == "status":
+            res = control("GETINFO status/bootstrap-phase")[0][0]
+            progress = int(res.split("PROGRESS=")[1].split()[0]) if "PROGRESS=" in res else 0
+            send({"ok": True, "progress": progress, "ready": progress >= 100})
+        elif cmd == "newnym":
+            control("SIGNAL NEWNYM")
+            send({"ok": True})
+        else:
+            send({"ok": False, "error": "unknown command"})
+    except Exception as e:
+        send({"ok": False, "error": str(e)})
+
+main()

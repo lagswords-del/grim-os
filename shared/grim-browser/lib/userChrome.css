@@ -1,0 +1,2 @@
+/* Grim Browser: lets the transparency slider in Grim Shield's settings show through */
+#main-window, #navigator-toolbox { background-color: transparent !important; }

@@ -1,0 +1,91 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Grim Browser settings</title><link rel="stylesheet" href="grim.css">
+<style>
+  body { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  nav { background: var(--panel); border-right: 1px solid var(--line); padding: 24px 14px; position: sticky; top: 0; height: 100vh; }
+  nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; margin-bottom: 22px; }
+  nav .brand img { width: 34px; }
+  nav a { display: block; padding: 8px 12px; border-radius: 8px; color: var(--text); text-decoration: none; }
+  nav a:hover { background: var(--line); }
+  main { padding: 28px 40px 80px; max-width: 860px; }
+  section { margin-bottom: 40px; }
+  h2 { margin: 0 0 6px; } h2 + p { margin-top: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 6px 18px; }
+  .themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin: 12px 0; }
+  .theme { border: 2px solid var(--line); border-radius: 10px; padding: 10px; cursor: pointer; text-align: center; }
+  .theme.on { border-color: var(--red); }
+  .theme .sw { height: 40px; border-radius: 6px; margin-bottom: 6px; display: flex; align-items: end; padding: 4px; }
+  .theme .sw i { width: 30%; height: 4px; border-radius: 2px; }
+  input[type=range] { width: 100%; accent-color: var(--red); }
+  .engines label { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .engines label:last-child { border: 0; }
+  .allow li { display: flex; justify-content: space-between; padding: 4px 0; }
+  ul { padding-left: 18px; }
+</style></head>
+<body>
+<nav>
+  <div class="brand"><img src="icons/48.png" alt="">Grim Browser</div>
+  <a href="#look">Look</a><a href="#search">Search</a><a href="#privacy">Privacy</a>
+  <a href="#burn">Burn</a><a href="#extensions">Extensions</a><a href="#about">About</a>
+</nav>
+<main>
+  <section id="look">
+    <h2>Look</h2><p class="dim">Colours for the tabs, toolbar and new-tab page. Private windows are always purple.</p>
+    <div class="themes" id="themes"></div>
+    <div class="card">
+      <div class="switch" style="display:block">
+        <div class="what">Transparency: <span id="alphaV"></span>%</div>
+        <div class="why">How see-through the tab bar and toolbar are. Needs a desktop that draws transparency (niri, river, or X11 with a compositor).</div>
+        <input type="range" id="alpha" min="0" max="60" step="5">
+      </div>
+    </div>
+  </section>
+
+  <section id="search">
+    <h2>Search</h2><p class="dim">Used by the new-tab page, the right-click menu, the <b>g</b> keyword in the address bar, and grim-search.</p>
+    <div class="card engines" id="engines"></div>
+    <div class="card" style="margin-top:10px">
+      <div class="switch"><div><div class="what">Your own SearXNG server</div><div class="why">Leave empty to use searx.be</div></div>
+        <input type="url" id="searx" placeholder="https://searx.example.org" style="width:280px"></div>
+    </div>
+    <p class="dim">The address bar's own engine list (DuckDuckGo, Startpage, Brave Search, Mojeek…) is in the ☰ menu → Settings → Search. Type <b>@sp</b>, <b>@br</b> or <b>@mj</b> before your words to use one once.</p>
+  </section>
+
+  <section id="privacy">
+    <h2>Privacy</h2><p class="dim">Grim Browser never sends telemetry or usage data anywhere, and that can't be switched on.</p>
+    <div class="card">
+      <div class="switch"><div><div class="what">Block ads and trackers</div><div class="why" id="listInfo"></div></div><input type="checkbox" id="blocker"></div>
+      <div class="switch"><div><div class="what">Private windows through Tor</div><div class="why" id="torInfo">Every private window's traffic goes through the Tor network. Normal windows stay direct and fast.</div></div><input type="checkbox" id="tor"></div>
+      <div class="switch"><div><div class="what">Hide your fingerprint</div><div class="why">Sites see a common, generic browser: a standard window size, UTC time, English, a US keyboard layout, a common operating system and fewer hardware details. Some sites look slightly different.</div></div><input type="checkbox" id="rfp"></div>
+      <div class="switch"><div><div class="what">Hide your IP from WebRTC</div><div class="why">Video calls still work; sites can't read your local or real IP through WebRTC.</div></div><input type="checkbox" id="webrtc"></div>
+    </div>
+    <p><button id="update">Update the block lists now</button> <span class="dim" id="updMsg"></span></p>
+    <h3>Sites where blocking is off</h3><ul class="allow" id="allow"></ul>
+  </section>
+
+  <section id="burn">
+    <h2>Burn</h2><p class="dim">One click to start over: cookies, history, cache, downloads list, form data and every site's stored data are deleted, every tab closes, and Tor gets a new identity. Saved passwords and bookmarks stay. Shortcut: Ctrl+Shift+Delete.</p>
+    <button class="red" id="burnBtn">🔥 Burn everything</button>
+  </section>
+
+  <section id="extensions">
+    <h2>Extensions</h2>
+    <p>Grim Browser runs normal Firefox extensions. Get them from <a href="https://addons.mozilla.org" target="_blank">addons.mozilla.org</a>; manage them in the ☰ menu → Add-ons and themes (or press Ctrl+Shift+A).</p>
+    <p class="dim">Good ones that respect your privacy:</p>
+    <ul>
+      <li><a href="https://addons.mozilla.org/firefox/addon/ublock-origin/" target="_blank">uBlock Origin</a>: also hides ad boxes inside pages (Grim Shield blocks by domain).</li>
+      <li><a href="https://addons.mozilla.org/firefox/addon/bitwarden-password-manager/" target="_blank">Bitwarden</a>: open-source password manager.</li>
+      <li><a href="https://addons.mozilla.org/firefox/addon/darkreader/" target="_blank">Dark Reader</a>: dark mode for every site.</li>
+      <li><a href="https://addons.mozilla.org/firefox/addon/multi-account-containers/" target="_blank">Multi-Account Containers</a>: keep logins separate.</li>
+      <li><a href="https://addons.mozilla.org/firefox/addon/libredirect/" target="_blank">LibRedirect</a>: opens YouTube, Reddit and others through private front-ends.</li>
+    </ul>
+  </section>
+
+  <section id="about">
+    <h2>About</h2>
+    <p>Grim Browser is Firefox with Grim OS's settings and the Grim Shield extension. It sends no telemetry, studies, crash reports, sponsored content or Safe Browsing lookups. Firefox still checks Mozilla's list of harmful add-ons, so a known-bad extension can be switched off.</p>
+    <p class="dim">The icon is Iceraven's (MPL-2.0), recoloured for Grim OS. Private windows use Tor but are not Tor Browser: for the strongest anonymity, use Tor Browser.</p>
+  </section>
+</main>
+<script src="settings.js"></script>
+</body></html>

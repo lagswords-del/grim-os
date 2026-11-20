@@ -1,0 +1,93 @@
+{
+  "policies": {
+    "DisableTelemetry": true,
+    "DisableFirefoxStudies": true,
+    "DisablePocket": true,
+    "DisableFirefoxAccounts": true,
+    "DisableFeedbackCommands": true,
+    "DisableDefaultBrowserAgent": true,
+    "DisableSetDesktopBackground": true,
+    "DontCheckDefaultBrowser": true,
+    "CaptivePortal": false,
+    "NetworkPrediction": false,
+    "OverrideFirstRunPage": "",
+    "OverridePostUpdatePage": "",
+    "UserMessaging": {
+      "ExtensionRecommendations": false,
+      "FeatureRecommendations": false,
+      "UrlbarInterventions": false,
+      "SkipOnboarding": true,
+      "MoreFromMozilla": false,
+      "FirefoxLabs": false,
+      "Locked": false
+    },
+    "FirefoxHome": {
+      "Search": true,
+      "TopSites": false,
+      "SponsoredTopSites": false,
+      "Highlights": false,
+      "Pocket": false,
+      "SponsoredPocket": false,
+      "Stories": false,
+      "SponsoredStories": false,
+      "Snippets": false,
+      "Locked": false
+    },
+    "FirefoxSuggest": {
+      "WebSuggestions": false,
+      "SponsoredSuggestions": false,
+      "ImproveSuggest": false,
+      "Locked": false
+    },
+    "GenerativeAI": {
+      "Enabled": false,
+      "Locked": false
+    },
+    "EnableTrackingProtection": {
+      "Value": true,
+      "Cryptomining": true,
+      "Fingerprinting": true,
+      "EmailTracking": true,
+      "Locked": false
+    },
+    "ExtensionSettings": {
+      "grim-shield@grim.os": {
+        "private_browsing": true
+      }
+    },
+    "SearchEngines": {
+      "Default": "DuckDuckGo",
+      "Remove": ["Google", "Bing", "Amazon.com", "eBay"],
+      "Add": [
+        {
+          "Name": "Startpage",
+          "URLTemplate": "https://www.startpage.com/sp/search?query={searchTerms}",
+          "Method": "GET",
+          "Alias": "@sp",
+          "Description": "Google results, without Google seeing you"
+        },
+        {
+          "Name": "Brave Search",
+          "URLTemplate": "https://search.brave.com/search?q={searchTerms}",
+          "Method": "GET",
+          "Alias": "@br",
+          "Description": "Brave's own independent index"
+        },
+        {
+          "Name": "Mojeek",
+          "URLTemplate": "https://www.mojeek.com/search?q={searchTerms}",
+          "Method": "GET",
+          "Alias": "@mj",
+          "Description": "Independent, no tracking"
+        },
+        {
+          "Name": "DuckDuckGo HTML",
+          "URLTemplate": "https://html.duckduckgo.com/html/?q={searchTerms}",
+          "Method": "GET",
+          "Alias": "@dh",
+          "Description": "DuckDuckGo without JavaScript"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""grim-search: search the web privately from the terminal or a search box.
+
+  grim-search                   ask what to search for, list the results by number, open one
+  grim-search WORDS             search straight away
+  grim-search --engine NAME     ddg (default), startpage, brave, mojeek, searx, wiki
+  grim-search --tor             search through Tor (needs Grim Browser's Tor running)
+  grim-search --gui             a search box (rofi / fuzzel); opens the results in Grim Browser
+  grim-search --open WORDS      open the results page in Grim Browser instead of listing
+
+In the list:  a number opens that result in Grim Browser   p NUMBER opens it in a private (Tor) window
+              n next page   e change engine   b open this search in the browser   q quit
+"""
+import html, os, re, shutil, subprocess, sys, urllib.parse, urllib.request
+
+R, B, G, N = "\033[31m", "\033[1;97m", "\033[90m", "\033[0m"
+ENGINES = {
+    "ddg": ("DuckDuckGo", "https://html.duckduckgo.com/html/?q={q}", "ddg"),
+    "mojeek": ("Mojeek", "https://www.mojeek.com/search?q={q}", None),
+    "startpage": ("Startpage", "https://www.startpage.com/sp/search?query={q}", None),
+    "brave": ("Brave Search", "https://search.brave.com/search?q={q}", None),
+    "searx": ("SearXNG", "https://searx.be/search?q={q}", None),
+    "wiki": ("Wikipedia", "https://en.wikipedia.org/w/index.php?search={q}", None),
+}
+UA = "Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0"   # a common one, not yours
+
+
+def fetch(url, tor):
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.5"})
+    if tor:   # curl does SOCKS with remote DNS; urllib can't
+        out = subprocess.run(["curl", "-fsSL", "--max-time", "40", "--socks5-hostname", "127.0.0.1:9150",
+                              "-A", UA, url], capture_output=True, text=True)
+        if out.returncode:
+            raise RuntimeError("Tor isn't reachable on 127.0.0.1:9150 (start Grim Browser first)")
+        return out.stdout
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def clean(s):
+    return html.unescape(re.sub(r"<[^>]+>", "", s or "")).strip()
+
+
+def parse(kind, page):
+    res = []
+    if kind == "ddg":
+        for m in re.finditer(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>(.*?)(?=<a[^>]+class="result__a"|$)', page, re.S):
+            url = m.group(1)
+            if "uddg=" in url:
+                url = urllib.parse.unquote(url.split("uddg=")[1].split("&")[0])
+            if "duckduckgo.com/y.js" in url:      # their own ads
+                continue
+            snip = re.search(r'class="result__snippet"[^>]*>(.*?)</a>', m.group(3), re.S)
+            res.append((clean(m.group(2)), url, clean(snip.group(1)) if snip else ""))
+    elif kind == "mojeek":
+        for m in re.finditer(r'<a class="ob" href="([^"]+)".*?<h2><a[^>]*>(.*?)</a></h2>(?:.*?<p class="s">(.*?)</p>)?', page, re.S):
+            res.append((clean(m.group(2)), m.group(1), clean(m.group(3))))
+    return res
+
+
+def browser(url, private=False):
+    cmd = ["grim-browser"] + (["--private"] if private else []) + [url]
+    if not shutil.which("grim-browser"):
+        cmd = ["xdg-open", url]
+    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def gui(engine):
+    prompt = "Search"
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("fuzzel"):
+        cmd = ["fuzzel", "--dmenu", "--prompt", "Search: ", "--lines", "0"]
+    elif shutil.which("rofi"):
+        cmd = ["rofi", "-dmenu", "-p", prompt, "-l", "0"]
+    elif shutil.which("dmenu"):
+        cmd = ["dmenu", "-p", prompt]
+    else:
+        sys.exit("No search box program (rofi, fuzzel or dmenu) is installed.")
+    q = subprocess.run(cmd, input="", capture_output=True, text=True).stdout.strip()
+    if q:
+        browser(ENGINES[engine][1].replace("{q}", urllib.parse.quote_plus(q)))
+
+
+def tui(query, engine, tor):
+    page_no = 0
+    while True:
+        if not query:
+            try:
+                query = input(f"{B}Search:{N} ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print(); return
+            if not query:
+                return
+        name, url, kind = ENGINES[engine]
+        full = url.replace("{q}", urllib.parse.quote_plus(query))
+        if kind is None:   # engines that don't give a plain results page: open in the browser
+            print(f"{G}{name} opens in Grim Browser.{N}"); browser(full); return
+        if kind == "ddg" and page_no:
+            full += f"&s={page_no * 30}&dc={page_no * 30 + 1}"
+        if kind == "mojeek" and page_no:
+            full += f"&s={page_no * 10 + 1}"
+        print(f"{G}Searching {name}{' through Tor' if tor else ''}…{N}")
+        try:
+            results = parse(kind, fetch(full, tor))
+        except Exception as e:
+            print(f"{R}Couldn't search: {e}{N}"); return
+        if not results:
+            print("No results (or the engine blocked the request). Try e to change engine, or b to open it in the browser.")
+        cols = shutil.get_terminal_size().columns
+        print(f"\n  {B}{query}{N}  {G}{name}, page {page_no + 1}{N}\n")
+        for i, (title, link, snip) in enumerate(results[:10], 1):
+            host = urllib.parse.urlparse(link).netloc.replace("www.", "")
+            print(f"  {R}{i:2d}{N}  {B}{title[:cols - 8]}{N}")
+            print(f"      {G}{host}{N}")
+            if snip:
+                print(f"      {snip[:cols - 8]}")
+            print()
+        while True:
+            try:
+                a = input(f"{R}number{N} open · {R}p N{N} private · {R}n{N} next · {R}e{N} engine · {R}b{N} browser · {R}s{N} new search · {R}q{N} quit > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print(); return
+            if a in ("q", ""):
+                return
+            if a == "n":
+                page_no += 1; break
+            if a == "s":
+                query, page_no = "", 0; break
+            if a == "b":
+                browser(url.replace("{q}", urllib.parse.quote_plus(query)))
+                continue
+            if a == "e":
+                keys = list(ENGINES)
+                for i, k in enumerate(keys, 1):
+                    print(f"  {R}{i}{N}  {ENGINES[k][0]}")
+                c = input("> ").strip()
+                if c.isdigit() and 1 <= int(c) <= len(keys):
+                    engine, page_no = keys[int(c) - 1], 0
+                break
+            private = a.startswith("p ")
+            n = a[2:].strip() if private else a
+            if n.isdigit() and 1 <= int(n) <= min(10, len(results)):
+                browser(results[int(n) - 1][1], private)
+                print(f"{G}Opened {'in a private window ' if private else ''}{results[int(n) - 1][1]}{N}")
+            else:
+                print("Type a result number, or one of the letters.")
+
+
+def main(argv):
+    engine, tor, mode, words = "ddg", False, "tui", []
+    it = iter(argv)
+    for a in it:
+        if a in ("-h", "--help"):
+            print(__doc__.strip()); return
+        elif a == "--engine":
+            engine = next(it, "ddg")
+            if engine not in ENGINES:
+                sys.exit("engines: " + ", ".join(ENGINES))
+        elif a == "--tor":
+            tor = True
+        elif a == "--gui":
+            mode = "gui"
+        elif a == "--open":
+            mode = "open"
+        else:
+            words.append(a)
+    q = " ".join(words)
+    if mode == "gui":
+        gui(engine)
+    elif mode == "open":
+        browser(ENGINES[engine][1].replace("{q}", urllib.parse.quote_plus(q)))
+    else:
+        tui(q, engine, tor)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

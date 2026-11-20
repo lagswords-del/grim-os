@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>New tab</title><link rel="stylesheet" href="grim.css">
+<style>
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
+  img { width: 96px; height: 96px; }
+  form { display: flex; gap: 8px; width: min(640px, 90vw); }
+  #q { flex: 1; font-size: 18px; padding: 14px 18px; border-radius: 12px; }
+  select { border-radius: 12px; }
+  .private { color: #b07ad8; font-size: 13px; }
+</style></head>
+<body>
+  <img src="icons/128.png" alt="">
+  <form id="f"><input type="text" id="q" placeholder="Search privately…" autofocus autocomplete="off"><select id="engine"></select></form>
+  <div class="dim" id="hint">Type <b>g</b> and a space in the address bar to search from anywhere.</div>
+  <script src="engines.js"></script><script src="newtab.js"></script>
+</body></html>

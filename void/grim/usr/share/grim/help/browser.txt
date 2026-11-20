@@ -1,0 +1,23 @@
+Grim Browser
+============
+Install it from grimhelp > Install apps > Grim apps. Firefox underneath, set up for privacy:
+
+  - No telemetry, studies, crash reports, sponsored content, Pocket or Safe Browsing lookups.
+  - Grim Shield (the red raven button): blocks ads and trackers (about 95,000 domains, updated
+    daily), shows how many were blocked, and turns blocking off per site if one breaks.
+  - Private windows (Ctrl+Shift+P) go through Tor automatically and turn purple.
+    They're private and anonymous-ish, but not Tor Browser: use Tor Browser for real anonymity.
+  - Burn (in Grim Shield, or Ctrl+Shift+Delete): deletes cookies, history, cache and site data,
+    closes every tab, and gives Tor a new identity.
+  - Fingerprinting protection: sites see a generic browser (standard window size, UTC time,
+    English, US keyboard layout, common OS).
+  - Settings: Grim Shield > Settings. Themes (Grim, Bone, Void, Midnight, Ember, Ash),
+    transparency, search engine, privacy switches, extensions.
+  - Extensions: normal Firefox ones from addons.mozilla.org (Ctrl+Shift+A to manage).
+
+  grim-browser             open it         grim-browser --private URL   a Tor window
+  grim-browser --reset     start over with a fresh profile
+  grim-search              search from the terminal, results by number
+  grim-search --gui        a search box that opens Grim Browser
+  In the address bar: g WORDS searches with your Grim engine; @sp @br @mj use Startpage,
+  Brave Search or Mojeek once.

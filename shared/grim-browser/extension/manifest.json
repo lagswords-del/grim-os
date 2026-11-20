@@ -1,0 +1,31 @@
+{
+  "manifest_version": 2,
+  "name": "Grim Shield",
+  "version": "1.0.0",
+  "description": "Grim Browser's shield: blocks ads and trackers, sends private windows through Tor, burns everything in one click, and holds Grim's settings.",
+  "browser_specific_settings": {
+    "gecko": { "id": "grim-shield@grim.os", "strict_min_version": "128.0" }
+  },
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "permissions": [
+    "<all_urls>", "proxy", "webRequest", "webRequestBlocking", "browsingData", "storage", "unlimitedStorage",
+    "tabs", "privacy", "theme", "nativeMessaging", "search", "notifications", "menus", "alarms"
+  ],
+  "incognito": "spanning",
+  "background": { "scripts": ["engines.js", "seed.js", "background.js"] },
+  "browser_action": {
+    "default_icon": { "16": "icons/16.png", "32": "icons/32.png" },
+    "default_title": "Grim Shield",
+    "default_popup": "popup.html",
+    "default_area": "navbar"
+  },
+  "options_ui": { "page": "settings.html", "open_in_tab": true },
+  "chrome_url_overrides": { "newtab": "newtab.html" },
+  "omnibox": { "keyword": "g" },
+  "content_scripts": [
+    { "matches": ["http://*/*", "https://*/*"], "css": ["cosmetic.css"], "run_at": "document_start", "all_frames": true }
+  ],
+  "commands": {
+    "burn": { "suggested_key": { "default": "Ctrl+Shift+Delete" }, "description": "Burn: clear everything and get a new identity" }
+  }
+}

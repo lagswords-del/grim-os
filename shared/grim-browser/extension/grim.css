@@ -1,0 +1,21 @@
+/* Grim Shield pages */
+:root { --bg: #0a0a0a; --panel: #161616; --line: #2a2a2a; --text: #e8e8e8; --dim: #8a8a8a; --red: #c1121f; --red2: #e5383b; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, "Inter", "DejaVu Sans", sans-serif; }
+a { color: var(--red2); }
+button, select, input[type=text], input[type=url] {
+  font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--red); }
+button.red { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
+button.red:hover { background: var(--red2); }
+.dim { color: var(--dim); }
+.switch { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.switch:last-child { border-bottom: 0; }
+.switch .what { font-weight: 600; }
+.switch .why { color: var(--dim); font-size: 13px; }
+input[type=checkbox] { appearance: none; width: 44px; height: 24px; border-radius: 12px; background: var(--line); position: relative; cursor: pointer; flex: none; }
+input[type=checkbox]::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #bbb; transition: .15s; }
+input[type=checkbox]:checked { background: var(--red); }
+input[type=checkbox]:checked::after { left: 23px; background: #fff; }

@@ -1,5 +1,6 @@
 # grimhelp's app list: category|name|what|kind:target
 #   kind: void = Void package, flatpak = Flathub app (for apps not built for musl), src = built on your PC
+Grim apps|Grim Browser|private Firefox: Tor private windows, no ads, no trackers, no telemetry|void:grim-browser
 Grim apps|Grim Shot|screenshots and screen recording (Super+Shift+S)|void:grim-shot
 Grim apps|grim-ai|a local AI chat in the terminal with the Grim face|void:grim-ai
 Shells|fish|friendly shell with suggestions as you type|void:fish-shell

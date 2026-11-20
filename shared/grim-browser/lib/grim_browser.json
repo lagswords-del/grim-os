@@ -1,0 +1,7 @@
+{
+  "name": "grim_browser",
+  "description": "Grim Browser helper (Tor status and new identity)",
+  "path": "/usr/lib/grim-browser/grim-browser-native",
+  "type": "stdio",
+  "allowed_extensions": ["grim-shield@grim.os"]
+}
