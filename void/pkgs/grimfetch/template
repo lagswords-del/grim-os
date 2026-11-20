@@ -1,7 +1,7 @@
 # Template file for 'grimfetch'
 # System info for Grim OS / Grim Void. build.sh copies grimos/grimfetch into files/src.
 pkgname=grimfetch
-version=1.2.1
+version=1.2.2
 revision=1
 hostmakedepends="cargo"
 short_desc="System info with the Grim reaper or the Grim Void ring"

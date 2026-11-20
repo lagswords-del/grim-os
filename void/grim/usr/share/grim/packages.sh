@@ -1,8 +1,8 @@
 # shellcheck shell=bash
-# Grim Void 1.2.1 package sets. Read by grim-install (on the USB) and build.sh (to fill the
+# Grim Void 1.2.2 package sets. Read by grim-install (on the USB) and build.sh (to fill the
 # USB's offline repository), so both always agree.
 
-GRIM_VERSION=1.2.1
+GRIM_VERSION=1.2.2
 GRIM_ARCH=x86_64-musl
 GRIM_MIRROR=https://repo-default.voidlinux.org/current/musl
 
