@@ -1,0 +1,16 @@
+System checks and clean-up
+==========================
+  grimctl disk               space on each disk, the biggest folders in your home,
+                             disk health (with sudo)
+  grimctl clean --dry-run    see what can be freed
+  sudo grimctl clean         free it: downloaded packages, unused packages, old kernels,
+                             thumbnails, old logs, unused Flatpak runtimes
+  grimctl ram                memory use, how much zram is saving, the biggest programs
+  sudo grimctl ram drop      free the file cache
+  grimctl battery            charge, health (vs. new), cycles, power use
+  sudo grimctl battery limit 80   stop charging at 80% (kept after reboots); "off" undoes it
+  grimctl net                connections, IP, Wi-Fi signal, DNS, online or not
+  grimctl net speed          a quick speed test
+  sudo grimctl net dns cloudflare   or quad9, adguard (blocks ads), auto
+
+Quick settings for most of this: grimhelp > Quick settings.

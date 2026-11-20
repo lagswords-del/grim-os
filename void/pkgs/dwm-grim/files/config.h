@@ -62,6 +62,7 @@ static char dmenumon[2] = "0"; /* component of dmenucmd, manipulated in spawn() 
 static const char *dmenucmd[] = { "dmenu_run", "-m", dmenumon, "-fn", dmenufont, "-nb", col_gray1, "-nf", col_gray3, "-sb", col_cyan, "-sf", col_gray4, NULL };
 static const char *termcmd[]  = { "grim-term", NULL };
 static const char *wificmd[]  = { "grim-term", "-e", "grim-wifi", NULL };
+static const char *shotcmd[]  = { "grim-shot-key", NULL };
 
 /* Super+F: fullscreen on/off for the focused window */
 static void togglefullscr(const Arg *arg) { if (selmon->sel) setfullscreen(selmon->sel, !selmon->sel->isfullscreen); }
@@ -77,6 +78,7 @@ static const Key keys[] = {
 	{ MODKEY,                       XK_d,      spawn,          {.v = dmenucmd } },
 	{ MODKEY,                       XK_u,      incnmaster,     {.i = -1 } },
 	{ MODKEY,                       XK_w,      spawn,          {.v = wificmd } },
+	{ MODKEY|ShiftMask,             XK_s,      spawn,          {.v = shotcmd } },
 	{ MODKEY,                       XK_h,      setmfact,       {.f = -0.05} },
 	{ MODKEY,                       XK_l,      setmfact,       {.f = +0.05} },
 	{ MODKEY|ShiftMask,             XK_Return, zoom,           {0} },

@@ -2,7 +2,7 @@ Getting started with Grim Void
 ==============================
 Grim Void is Grim OS built on Void Linux: musl, runit, xbps, and Grim's own tools.
 
-  grimhelp              this help and the app centre (menus)
+  grimhelp              this help, quick settings and the app centre (menus)
   grimctl               the system command (grimctl help lists everything)
   grim-wifi             find your Wi-Fi hardware and join a network
   grim-session          start a desktop from the console
@@ -12,4 +12,4 @@ Grim Void is Grim OS built on Void Linux: musl, runit, xbps, and Grim's own tool
 Your whole system is described in one file:  /etc/grim/system.conf
 Edit it and run "sudo grimctl apply". See: grimhelp system
 
-Pages: start, system, apps, source, desktops, keys, lowram, spotify, network
+Pages: start, system, apps, source, desktops, keys, lowram, spotify, network, tools, shot, ai

@@ -2,6 +2,7 @@
 # grimhelp: Grim Void's help and app centre (a TUI).
 #   grimhelp            the menu
 #   grimhelp apps       install apps from the list
+#   grimhelp settings   quick settings
 #   grimhelp search     search Void, Flathub, or build from source
 #   grimhelp TOPIC      read a help page (start, apps, desktops, keys, lowram, source, system, spotify)
 SHARE=/usr/share/grim
@@ -57,7 +58,7 @@ is_installed() {
 install_target() {
     case $1 in
         void:*) # shellcheck disable=SC2086
-                sudo grimctl install ${1#void:} ;;
+                sudo env GRIM_HELP=1 grimctl install ${1#void:} ;;
         flatpak:*) sudo grimctl install "@flatpak:${1#flatpak:}" ;;
     esac
 }
@@ -95,7 +96,7 @@ search_menu() {
                 2 "Compile from source on this PC (-march=native, slower)" \
                 3 "Show its details") || return
             case $how in
-                1) run sudo grimctl install "$name" ;;
+                1) run sudo env GRIM_HELP=1 grimctl install "$name" ;;
                 2) run sudo grimctl build "$name" ;;
                 3) run xbps-query -R "$name" ;;
             esac ;;
@@ -166,10 +167,101 @@ help_menu() {
     done
 }
 
+# --------------------------------------------------------------- quick settings
+qs_now() {   # the current value of each quick setting, for the menu
+    case $1 in
+        wifi) nmcli radio wifi 2>/dev/null | sed 's/enabled/on/; s/disabled/off/' ;;
+        bt) if command -v bluetoothctl >/dev/null && [[ -e /var/service/bluetoothd ]]; then
+                bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo on || echo off
+            else echo "not set up"; fi ;;
+        vol) wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | awk '{v=int($2*100+0.5); print v "%" ($3 ? " (muted)" : "")}' ;;
+        light) command -v brightnessctl >/dev/null && brightnessctl -m -c backlight 2>/dev/null | cut -d, -f4 | head -1 ;;
+        dnd) if command -v dunstctl >/dev/null && pgrep -x dunst >/dev/null; then dunstctl is-paused | sed 's/true/on/; s/false/off/'
+             elif command -v makoctl >/dev/null && pgrep -x mako >/dev/null; then makoctl mode | grep -q do-not-disturb && echo on || echo off
+             else echo off; fi ;;
+        night) pgrep -x gammastep >/dev/null && echo on || echo off ;;
+        *) grimctl get "$1" ;;
+    esac
+}
+
+qs_menu() {
+    local c bat=""
+    ls /sys/class/power_supply/BAT*/charge_control_end_threshold >/dev/null 2>&1 && bat=1
+    while :; do
+        local items=(
+            wifi    "Wi-Fi                 $(qs_now wifi)"
+            bt      "Bluetooth             $(qs_now bt)"
+            vol     "Volume                $(qs_now vol)"
+            light   "Screen brightness     $(qs_now light)"
+            dnd     "Do not disturb        $(qs_now dnd)"
+            night   "Night light           $(qs_now night)"
+            dns     "DNS                   $(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)"
+        )
+        if [[ -n $bat ]]; then local lim; lim=$(qs_now battery_limit); items+=(battery "Battery charge limit  ${lim:+$lim%}${lim:-none}"); fi
+        items+=(
+            update  "Automatic updates     $(qs_now auto_update)"
+            zram    "Compressed RAM swap   $(qs_now zram)"
+            boot    "Start in              $(qs_now boot)"
+            desktop "Desktop at login      $(qs_now desktop)"
+            keymap  "Keyboard layout       $(qs_now keymap)"
+            tz      "Time zone             $(qs_now timezone)"
+            wall    "Wallpaper"
+            logo    "grimfetch logo"
+        )
+        c=$(d --title "Quick settings" --cancel-label "Back" --no-tags --menu "Pick one to change it." 24 64 16 "${items[@]}") || return
+        case $c in
+            wifi)  if [[ $(qs_now wifi) == on ]]; then nmcli radio wifi off; else nmcli radio wifi on; fi ;;
+            bt)    if [[ $(qs_now bt) == "not set up" ]]; then
+                       clear; sudo grimctl install bluez && sudo ln -sf /etc/sv/bluetoothd /var/service/ && sleep 2
+                   fi
+                   if [[ $(qs_now bt) == on ]]; then bluetoothctl power off >/dev/null; else bluetoothctl power on >/dev/null; fi ;;
+            vol)   local v; v=$(qs_now vol); v=${v%%%*}
+                   v=$(d --title "Volume" --rangebox "Left/Right or type a number. 0 mutes." 7 50 0 150 "${v:-50}") || continue
+                   if ((v == 0)); then wpctl set-mute @DEFAULT_AUDIO_SINK@ 1; else wpctl set-mute @DEFAULT_AUDIO_SINK@ 0; wpctl set-volume @DEFAULT_AUDIO_SINK@ "$v%"; fi ;;
+            light) local b; b=$(qs_now light); b=${b%\%}
+                   b=$(d --title "Screen brightness" --rangebox "Left/Right or type a number." 7 50 5 100 "${b:-80}") || continue
+                   brightnessctl -c backlight set "$b%" >/dev/null ;;
+            dnd)   if command -v dunstctl >/dev/null && pgrep -x dunst >/dev/null; then dunstctl set-paused toggle
+                   elif command -v makoctl >/dev/null; then makoctl mode -t do-not-disturb >/dev/null; fi ;;
+            night) if pgrep -x gammastep >/dev/null; then pkill -x gammastep
+                   else
+                       command -v gammastep >/dev/null || { clear; sudo grimctl install gammastep; }
+                       local t; t=$(d --title "Night light" --menu "How warm?" 12 50 4 4500 "a little" 3800 "warm" 3200 "very warm" 2600 "candle") || continue
+                       (setsid gammastep -O "$t" >/dev/null 2>&1 &)
+                   fi ;;
+            dns)   local n; n=$(d --title "DNS" --menu "Which DNS servers?" 13 64 4 auto "from your router (default)" cloudflare "Cloudflare 1.1.1.1 (fast)" \
+                       quad9 "Quad9 (blocks known bad sites)" adguard "AdGuard (blocks ads)") || continue
+                   clear; sudo grimctl net dns "$n"; pause ;;
+            battery) local l; l=$(d --title "Battery charge limit" --menu "Stopping a little early makes the battery last more years." 12 60 4 \
+                       80 "stop at 80% (best for the battery)" 90 "stop at 90%" 100 "charge to 100%") || continue
+                   clear; sudo grimctl battery limit "$l"; pause ;;
+            update) local u; u=$(d --title "Automatic updates" --default-item "$(qs_now auto_update)" --menu "grimctl update runs by itself:" 11 50 3 \
+                       daily "once a day" weekly "once a week" off "never (run it yourself)") || continue
+                   clear; sudo grimctl set auto_update "$u"; pause ;;
+            zram)  local z; z=$(d --title "Compressed RAM swap (zram)" --default-item "$(qs_now zram)" --menu "How much RAM can be used as compressed swap?" 13 60 5 \
+                       25% "a quarter" 50% "half (default)" 75% "three quarters (low-RAM PCs)" 100% "as much as RAM" off "off") || continue
+                   clear; sudo grimctl set zram "$z"; pause ;;
+            boot)  local m; m=$(d --title "Start in" --menu "What should Grim Void start in?" 10 64 2 desktop "the desktop after login" lowram "low-RAM mode: a console only") || continue
+                   clear; sudo grimctl boot "$m"; pause ;;
+            desktop) desktop_menu ;;
+            keymap) local k; k=$(d --title "Keyboard layout" --default-item "$(qs_now keymap)" --menu "Layout:" 18 50 10 \
+                       us US uk UK de German fr French es Spanish it Italian se Swedish no Norwegian pl Polish br-abnt2 Brazilian) || continue
+                   clear; sudo grimctl set keymap "$k"; loadkeys "$k" 2>/dev/null
+                   [[ -n ${DISPLAY:-} ]] && setxkbmap "${k%%-*}" 2>/dev/null; pause ;;
+            tz)    local z2; z2=$(d --title "Time zone" --inputbox "Like Europe/London, America/New_York, Asia/Tokyo:" 9 60 "$(qs_now timezone)") || continue
+                   [[ -f /usr/share/zoneinfo/$z2 ]] || { d --msgbox "No time zone called $z2." 6 50; continue; }
+                   clear; sudo grimctl set timezone "$z2"; pause ;;
+            wall)  wallpaper_menu ;;
+            logo)  fetch_menu ;;
+        esac
+    done
+}
+
 main_menu() {
     local c
     while :; do
         c=$(d --title "grimhelp" --cancel-label "Exit" --menu "Help and apps for Grim Void." 22 66 13 \
+            0 "Quick settings (Wi-Fi, sound, brightness, updates...)" \
             1 "Install apps" \
             2 "Search for anything (Void, Flathub, source)" \
             3 "Build something from a git link" \
@@ -183,7 +275,7 @@ main_menu() {
             11 "Edit the system file (/etc/grim/system.conf)" \
             12 "Help pages") || { clear; exit 0; }
         case $c in
-            1) apps_menu ;; 2) search_menu ;; 3) build_git ;; 4) remove_menu ;;
+            0) qs_menu ;; 1) apps_menu ;; 2) search_menu ;; 3) build_git ;; 4) remove_menu ;;
             5) run sudo grimctl update ;; 6) run grim-wifi ;; 7) wallpaper_menu ;; 8) desktop_menu ;;
             9) lowram_menu ;; 10) fetch_menu ;; 11) clear; sudo grimctl edit; pause ;; 12) help_menu ;;
         esac
@@ -193,8 +285,9 @@ main_menu() {
 case ${1:-} in
     "") main_menu ;;
     apps|install) apps_menu; clear ;;
+    settings|quick|qs) qs_menu; clear ;;
     search) search_menu; clear ;;
-    -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//' ;;
+    -h|--help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//' ;;
     *) [[ -f $HELP/$1.txt ]] && { cat "$HELP/$1.txt"; exit; }
        echo "No help page called $1. Pages: $(cd "$HELP" && ls | sed 's/\.txt$//' | tr '\n' ' ')"; exit 1 ;;
 esac

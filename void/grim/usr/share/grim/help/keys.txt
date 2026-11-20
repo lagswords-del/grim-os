@@ -9,7 +9,8 @@ Keys (the same on every desktop)
   Super + 1..9         workspace / tag
   Super + Shift + 1..9 move the window there
   Super + Shift + E    log out
-  Print                screenshot to ~/Pictures
+  Print                quick screenshot to ~/Pictures
+  Super + Shift + S    Grim Shot: area, window, full, record, GIF (install it in grimhelp)
   Super + left drag    move a window      (IceWM)
   Super + right drag   resize a window    (IceWM)
 

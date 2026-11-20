@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+"""grim-ai: a local AI chat in the terminal, with the Grim face at the top and a text bar below.
+
+  grim-ai                 open the chat
+  grim-ai "question"      ask once and print the answer      (cat file | grim-ai "explain" works too)
+  grim-ai setup           choose where the AI runs (this PC, or another computer) and the model
+  grim-ai status          show the settings
+
+Keys:  Enter send   Esc stop the answer   Up/Down earlier messages   PgUp/PgDn scroll
+       Ctrl+U clear the bar   Ctrl+C quit
+       /clear new chat   /setup change the AI   /quit quit
+
+It talks to any OpenAI-style chat server: llama.cpp's llama-server on this PC (set up for you),
+or Ollama / llama.cpp on another computer. Settings: ~/.config/grim/ai.conf
+"""
+import curses, json, locale, os, shutil, signal, subprocess, sys, textwrap, threading, time
+import urllib.error, urllib.request
+
+CONF = os.environ.get("GRIM_AI_CONF") or os.path.expanduser("~/.config/grim/ai.conf")
+MODELS_DIR = os.path.expanduser("~/.local/share/grim-ai/models")
+STATE = os.path.expanduser("~/.local/state/grim-ai")
+SYSTEM = ("You are grim-ai, a helpful assistant running locally on Grim Void Linux "
+          "(Void Linux with musl and runit; packages with xbps; the grimctl command manages the system). "
+          "Be concise and practical. Put commands and code in fenced code blocks.")
+MODELS = [  # name, size, url
+    ("Qwen 2.5 0.5B (fastest, 470 MB, ~1 GB RAM)", "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+     "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"),
+    ("Qwen 2.5 1.5B (recommended, 1.1 GB, ~2 GB RAM)", "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+     "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf"),
+    ("Qwen 2.5 3B (smartest, 2 GB, ~3.5 GB RAM)", "qwen2.5-3b-instruct-q4_k_m.gguf",
+     "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"),
+]
+LLAMA_URL = "https://github.com/ggml-org/llama.cpp"
+R, B, G, N = "\033[31m", "\033[1;97m", "\033[90m", "\033[0m"
+
+
+# ------------------------------------------------------------------ settings
+def load_conf():
+    c = {"mode": "", "url": "http://127.0.0.1:8080/v1", "model": "", "model_file": "", "port": "8080"}
+    try:
+        for line in open(CONF):
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                c[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    return c
+
+
+def save_conf(c):
+    os.makedirs(os.path.dirname(CONF), exist_ok=True)
+    with open(CONF, "w") as f:
+        f.write("# grim-ai settings (grim-ai setup writes this)\n")
+        for k in ("mode", "url", "model", "model_file", "port"):
+            f.write(f"{k} = {c.get(k, '')}\n")
+
+
+def ask_number(question, options):
+    print(f"{B}{question}{N}")
+    for i, o in enumerate(options, 1):
+        print(f"  {R}{i}{N}  {o}")
+    while True:
+        a = input("> ").strip()
+        if a.isdigit() and 1 <= int(a) <= len(options):
+            return int(a) - 1
+        print(f"Type a number from 1 to {len(options)}.")
+
+
+def setup():
+    c = load_conf()
+    print(f"\n{B}grim-ai setup{N}\n")
+    where = ask_number("Where should the AI run?", [
+        "On this PC (private, works offline; needs a one-time build and a model download)",
+        "On another computer (an Ollama or llama.cpp server on your network)"])
+    if where == 0:
+        if not shutil.which("llama-server"):
+            print(f"\n{B}llama.cpp{N} runs the model. It isn't packaged for musl, so Grim builds it for your CPU")
+            print(f"(about 5-15 minutes):  {R}sudo grimctl build {LLAMA_URL}{N}")
+            if input("Build it now? [y/n] ").strip().lower().startswith("y"):
+                flags = "GRIM_CMAKE_ARGS=-DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DGGML_NATIVE=ON"
+                if subprocess.call(["sudo", "env", flags, "grimctl", "build", LLAMA_URL]) != 0 or not shutil.which("llama-server"):
+                    print("The build didn't finish. Try again later with: grim-ai setup"); return 1
+            else:
+                print("Run grim-ai setup again when you want it."); return 1
+        m = ask_number("\nWhich model? (a smaller one answers faster and uses less RAM)", [x[0] for x in MODELS])
+        name, fname, url = MODELS[m]
+        path = os.path.join(MODELS_DIR, fname)
+        if not os.path.exists(path):
+            os.makedirs(MODELS_DIR, exist_ok=True)
+            print(f"\nDownloading {fname} ...")
+            if subprocess.call(["curl", "-fL", "--progress-bar", "-o", path + ".part", url]) != 0:
+                print("The download failed. Check your internet and run grim-ai setup again."); return 1
+            os.rename(path + ".part", path)
+        c.update(mode="local", url=f"http://127.0.0.1:{c.get('port') or 8080}/v1", model=fname.rsplit(".", 1)[0], model_file=path)
+    else:
+        host = input("\nAddress of the server (like 192.168.1.20:11434 for Ollama, or a full URL): ").strip()
+        if not host.startswith("http"):
+            host = "http://" + host
+        host = host.rstrip("/")
+        if not host.endswith("/v1"):
+            host += "/v1"
+        models = list_models(host)
+        if models:
+            model = models[ask_number("\nWhich model?", models)]
+        else:
+            model = input("Couldn't list the models. Type the model name (like llama3.2:3b): ").strip()
+        c.update(mode="remote", url=host, model=model, model_file="")
+    save_conf(c)
+    print(f"\n{R}Done.{N} Start it with: grim-ai")
+    return 0
+
+
+# ------------------------------------------------------------------ server
+def get(url, timeout=3):
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return json.loads(r.read() or b"{}")
+
+
+def list_models(base):
+    try:
+        return [m["id"] for m in get(base + "/models").get("data", [])]
+    except Exception:
+        return []
+
+
+class Server:
+    """Starts llama-server for the local mode (only while grim-ai runs, so it doesn't hold RAM)."""
+    def __init__(self, c):
+        self.c, self.proc = c, None
+
+    def up(self):
+        try:
+            get(self.c["url"].rsplit("/v1", 1)[0] + "/health", 2)
+            return True
+        except Exception:
+            return False
+
+    def start(self):
+        if self.c["mode"] != "local" or self.up():
+            return None
+        if not shutil.which("llama-server"):
+            return "llama-server isn't installed. Run: grim-ai setup"
+        if not os.path.exists(self.c["model_file"]):
+            return "The model file is missing. Run: grim-ai setup"
+        os.makedirs(STATE, exist_ok=True)
+        log = open(os.path.join(STATE, "server.log"), "w")
+        self.proc = subprocess.Popen(["llama-server", "-m", self.c["model_file"], "--port", self.c["port"] or "8080",
+                                      "--host", "127.0.0.1", "-c", "4096"], stdout=log, stderr=log, start_new_session=True)
+        for _ in range(240):
+            if self.up():
+                return None
+            if self.proc.poll() is not None:
+                return "llama-server stopped. See ~/.local/state/grim-ai/server.log"
+            time.sleep(0.25)
+        return "llama-server didn't start in time."
+
+    def stop(self):
+        if self.proc and self.proc.poll() is None:
+            os.killpg(self.proc.pid, signal.SIGTERM)
+
+
+def stream_chat(c, messages, stop):
+    body = json.dumps({"model": c["model"], "messages": messages, "stream": True}).encode()
+    req = urllib.request.Request(c["url"] + "/chat/completions", body, {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        for raw in r:
+            if stop.is_set():
+                return
+            line = raw.decode("utf-8", "replace").strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                return
+            try:
+                piece = json.loads(data)["choices"][0]["delta"].get("content") or ""
+            except (KeyError, IndexError, json.JSONDecodeError):
+                continue
+            if piece:
+                yield piece
+
+
+# ------------------------------------------------------------------ the face
+# A hooded Grim face, 9 rows x 25 columns. {E} = eyes (5 wide), {M} = mouth (3 wide).
+HOOD = [
+    "          ▄▄▄▄▄▄▄          ",
+    "     ▄▄█▀▀▀     ▀▀▀█▄▄     ",
+    "   ▄█▀    ▄▄▄▄▄▄▄    ▀█▄   ",
+    "  ██    ▄▀       ▀▄    ██  ",
+    "  ██    █  {E}  █    ██  ",
+    "  ██    █   {M}   █    ██  ",
+    "  ██     ▀▄▄▄▄▄▄▄▀     ██  ",
+    " ▄█▀                   ▀█▄ ",
+    "██▀                     ▀██",
+]
+EYES = {"open": "●   ●", "blink": "─   ─", "left": "●  ● ", "right": " ●  ●"}
+MOUTHS = {"shut": "───", "smile": "╰─╯", "talk": ["▄▄▄", "███", "▀▀▀", "───"]}
+
+
+def face(eyes, mouth):
+    return [row.replace("{E}", eyes).replace("{M}", mouth) for row in HOOD]
+
+
+# ------------------------------------------------------------------ chat UI
+class Chat:
+    def __init__(self, c):
+        self.c = c
+        self.messages = [{"role": "system", "content": SYSTEM}]
+        self.lines = []          # (who, text) for display
+        self.state = "idle"      # idle | thinking | talking
+        self.last_piece = 0.0
+        self.stop = threading.Event()
+        self.lock = threading.Lock()
+
+    def send(self, text):
+        self.messages.append({"role": "user", "content": text})
+        with self.lock:
+            self.lines += [("you", text), ("ai", "")]
+            self.state = "thinking"
+        self.stop.clear()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        out = ""
+        try:
+            for piece in stream_chat(self.c, self.messages, self.stop):
+                out += piece
+                with self.lock:
+                    self.state, self.last_piece = "talking", time.time()
+                    self.lines[-1] = ("ai", out)
+        except Exception as e:
+            with self.lock:
+                self.lines[-1] = ("err", f"Couldn't reach the AI: {e}")
+        self.messages.append({"role": "assistant", "content": out})
+        with self.lock:
+            self.state = "idle"
+
+
+def wrap_lines(lines, width):
+    out = []
+    for who, text in lines:
+        label = {"you": "you", "ai": "grim", "err": "!!"}[who]
+        body = text or "…"
+        first = True
+        for para in body.split("\n"):
+            for w in (textwrap.wrap(para, max(10, width - 7)) or [""]):
+                out.append((who, (f"{label:>4} │ " if first else "     │ ") + w))
+                first = False
+        out.append((None, ""))
+    return out
+
+
+def ui(stdscr, chat, server):
+    curses.curs_set(1)
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_RED, -1)      # eyes, labels, bar
+    curses.init_pair(2, 8 if curses.COLORS > 8 else curses.COLOR_WHITE, -1)  # hood, dim text
+    curses.init_pair(3, curses.COLOR_WHITE, -1)    # text
+    red, dim, white = curses.color_pair(1), curses.color_pair(2), curses.color_pair(3)
+    stdscr.nodelay(True)
+    stdscr.keypad(True)
+    text, history, hpos, scroll = "", [], 0, 0
+    start = time.time()
+
+    def put(y, x, s, attr=0):
+        h, w = stdscr.getmaxyx()
+        if 0 <= y < h and x < w:
+            try:
+                stdscr.addnstr(y, max(0, x), s, max(0, w - max(0, x) - 1), attr)
+            except curses.error:
+                pass
+
+    while True:
+        now = time.time() - start
+        h, w = stdscr.getmaxyx()
+        stdscr.erase()
+        with chat.lock:
+            state, lines = chat.state, list(chat.lines)
+            typing = state == "talking" and time.time() - chat.last_piece < 0.35
+        # ---- the face, top centre
+        if typing:
+            rows, bob = face(EYES["open"], MOUTHS["talk"][int(now * 10) % 4]), int(now * 6) % 2
+        elif state != "idle":
+            rows, bob = face(EYES["left"] if int(now * 2) % 2 else EYES["right"], MOUTHS["shut"]), 0
+        else:
+            rows, bob = face(EYES["blink"] if now % 4 < 0.15 else EYES["open"], MOUTHS["smile"]), 0
+        fw = max(len(r) for r in rows)
+        x0 = max(0, (w - fw) // 2)
+        for i, row in enumerate(rows):
+            y = i + bob
+            for j, ch in enumerate(row):
+                if ch != " ":
+                    attr = red | curses.A_BOLD if ch in "●─╰╯▄█▀" and 4 <= i <= 5 and 8 < j < 18 else dim
+                    put(y, x0 + j, ch, attr)
+        status = {"idle": "ready", "thinking": "thinking" + "." * (int(now * 3) % 4), "talking": "answering"}[state]
+        title = f"grim-ai · {chat.c['model'] or '?'} · {status}"
+        put(len(rows) + 1, max(0, (w - len(title)) // 2), title, dim)
+        top = len(rows) + 3
+        put(top - 1, 0, "─" * (w - 1), dim)
+        # ---- conversation
+        area = max(1, h - top - 4)
+        wrapped = wrap_lines(lines, w - 2)
+        if not lines:
+            hint = "Ask anything. /clear starts over, Ctrl+C quits."
+            put(top + area // 2, max(0, (w - len(hint)) // 2), hint, dim)
+        scroll = max(0, min(scroll, max(0, len(wrapped) - area)))
+        view = wrapped[max(0, len(wrapped) - area - scroll): len(wrapped) - scroll]
+        for i, (who, s) in enumerate(view):
+            attr = red if who == "err" else white
+            put(top + i, 1, s[:5], red if who in ("ai", "err") else dim)
+            put(top + i, 6, s[5:], attr)
+        # ---- the text bar, bottom
+        by = h - 3
+        put(by, 0, "╭" + "─" * (w - 3) + "╮", red)
+        shown = text[-(w - 7):]
+        put(by + 1, 0, "│", red); put(by + 1, 2, "› ", red | curses.A_BOLD); put(by + 1, 4, shown, white)
+        put(by + 1, w - 2, "│", red)
+        put(by + 2, 0, "╰" + "─" * (w - 3) + "╯", red)
+        try:
+            stdscr.move(by + 1, min(w - 3, 4 + len(shown)))
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+        try:
+            k = stdscr.get_wch()
+        except curses.error:
+            time.sleep(0.03)
+            continue
+        if k in ("\n", "\r", curses.KEY_ENTER):
+            t = text.strip()
+            text, scroll = "", 0
+            if not t:
+                continue
+            if t in ("/quit", "/exit"):
+                return
+            if t == "/clear":
+                chat.messages, chat.lines = chat.messages[:1], []
+                continue
+            if t == "/setup":
+                curses.endwin(); setup(); chat.c.update(load_conf()); continue
+            if state != "idle":
+                continue
+            history.append(t); hpos = len(history)
+            chat.send(t)
+        elif k == "\x1b":
+            chat.stop.set()
+        elif k in (curses.KEY_BACKSPACE, "\x7f", "\b"):
+            text = text[:-1]
+        elif k == "\x15":
+            text = ""
+        elif k == curses.KEY_UP and history:
+            hpos = max(0, hpos - 1); text = history[hpos]
+        elif k == curses.KEY_DOWN and history:
+            hpos = min(len(history), hpos + 1); text = history[hpos] if hpos < len(history) else ""
+        elif k == curses.KEY_PPAGE:
+            scroll += max(1, area - 2)
+        elif k == curses.KEY_NPAGE:
+            scroll = max(0, scroll - max(1, area - 2))
+        elif isinstance(k, str) and k.isprintable():
+            text += k
+
+
+def main(argv):
+    locale.setlocale(locale.LC_ALL, "")
+    if argv and argv[0] in ("-h", "--help", "help"):
+        print(__doc__.strip()); return 0
+    if argv and argv[0] == "setup":
+        return setup()
+    c = load_conf()
+    if argv and argv[0] == "status":
+        for k, v in c.items():
+            print(f"{k:>11}  {v}")
+        return 0
+    if not c["mode"]:
+        print(f"{B}grim-ai isn't set up yet.{N}")
+        if setup() != 0:
+            return 1
+        c = load_conf()
+    server = Server(c)
+    err = server.start()
+    if err:
+        print(err, file=sys.stderr); return 1
+    try:
+        if argv:   # one question, answer to stdout
+            q = " ".join(argv)
+            if not sys.stdin.isatty():
+                q += "\n\n" + sys.stdin.read()
+            msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": q}]
+            for piece in stream_chat(c, msgs, threading.Event()):
+                sys.stdout.write(piece); sys.stdout.flush()
+            print()
+            return 0
+        curses.wrapper(ui, Chat(c), server)
+        return 0
+    except KeyboardInterrupt:
+        return 0
+    except urllib.error.URLError as e:
+        print(f"Couldn't reach the AI at {c['url']}: {e.reason}", file=sys.stderr); return 1
+    finally:
+        server.stop()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

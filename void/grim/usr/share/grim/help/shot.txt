@@ -1,0 +1,14 @@
+Grim Shot (screenshots and recordings)
+======================================
+Install it from grimhelp > Install apps > Grim apps. Then press Super+Shift+S on any desktop.
+
+  grim-shot             the menu
+  grim-shot area        drag a box            grim-shot window   pick a window
+  grim-shot full        the whole screen      grim-shot delay 5  after 5 seconds
+  grim-shot record      record the screen; run it again (or Super+Shift+S) to stop
+  grim-shot gif         record a short GIF
+  grim-shot last        open the last one     grim-shot folder   open the folder
+
+Pictures and videos go to ~/Pictures/Screenshots. Every screenshot is also copied,
+so you can paste it straight into a chat. Works on X11 (IceWM, Openbox, i3, dwm)
+and Wayland (niri, river).

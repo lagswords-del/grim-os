@@ -47,6 +47,7 @@ binds {
     Mod+D { spawn "fuzzel"; }
     Mod+W { spawn "grim-term" "-e" "grim-wifi"; }
     Mod+Shift+E { quit; }
+    Mod+Shift+S { spawn "grim-shot-key"; }
     Mod+Shift+Slash { show-hotkey-overlay; }
     Mod+Left  { focus-column-left; }
     Mod+Right { focus-column-right; }

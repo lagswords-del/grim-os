@@ -18,4 +18,7 @@ if ! grep -q '^/dev/zram0' /proc/swaps; then
     mkswap -L zram0 /dev/zram0 >/dev/null && swapon -p 100 /dev/zram0
     logger -t grim-zram "zram: $(( size / 1048576 )) MB ($want of RAM)" 2>/dev/null
 fi
+# also at boot: the battery charge limit from "battery_limit =" (grimctl battery limit N)
+lim=$(grimctl get battery_limit 2>/dev/null)
+for b in /sys/class/power_supply/BAT*/charge_control_end_threshold; do [ -n "$lim" ] && [ -w "$b" ] && echo "$lim" > "$b"; done
 exec sleep infinity

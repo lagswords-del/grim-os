@@ -56,6 +56,6 @@ declare -A GRIM_SHELL_BIN=([bash]="/bin/bash" [fish]="/usr/bin/fish" [zsh]="/usr
 grim_offline_set() {
     local d
     printf '%s\n' "${GRIM_BASE[@]}" "${GRIM_KERNELS[@]}" linux-grim-headers "${GRIM_BOOT_UEFI[@]}" "${GRIM_BOOT_BIOS[@]}" \
-        "${GRIM_NVIDIA[@]}" "${GRIM_INTEL_VIDEO[@]}" "${GRIM_AMD_VIDEO[@]}" "${GRIM_DESKTOP_COMMON[@]}" fish-shell zsh spotify-player-grim
+        "${GRIM_NVIDIA[@]}" "${GRIM_INTEL_VIDEO[@]}" "${GRIM_AMD_VIDEO[@]}" "${GRIM_DESKTOP_COMMON[@]}" fish-shell zsh spotify-player-grim grim-shot grim-ai
     for d in "${GRIM_DE_ORDER[@]}"; do printf '%s\n' ${GRIM_DE_PKGS[$d]}; done
 }

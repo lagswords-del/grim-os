@@ -1,0 +1,5 @@
+#!/bin/sh
+# Super+Shift+S on every Grim Void desktop: Grim Shot's menu, or how to get it.
+if command -v grim-shot >/dev/null; then exec grim-shot menu; fi
+notify-send -a "Grim Shot" "Grim Shot isn't installed" "Get it from grimhelp > Install apps > Grim apps" 2>/dev/null \
+    || grim-term -e sh -c 'echo "Grim Shot is not installed. Get it from: grimhelp > Install apps > Grim apps"; read x'

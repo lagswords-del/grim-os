@@ -16,7 +16,13 @@
 #   grimctl wifi                   find and join a Wi-Fi network
 #   grimctl fetch logo void|reaper choose grimfetch's logo
 #   grimctl zram                   show compressed-RAM swap use
+#   grimctl disk                   space, biggest folders, disk health
+#   grimctl clean [--dry-run]      free space: package cache, unused packages, old kernels, caches, logs
+#   grimctl ram [drop]             what uses memory, zram savings
+#   grimctl battery [limit N|off]  charge, health, cycles; stop charging at N%
+#   grimctl net [speed|dns NAME]   connections, IP, DNS, speed test, switch DNS
 #   grimctl get KEY                print a value from the system file
+#   grimctl set KEY VALUE          change a value in the system file and apply it
 set -uo pipefail
 
 CONF=${GRIM_CONF:-/etc/grim/system.conf}
@@ -188,6 +194,8 @@ cmd_apply() {
         off|no|"") [[ -L /var/service/grim-autoupdate ]] && rm -f /var/service/grim-autoupdate ;;
         *) [[ -e /etc/runit/runsvdir/default/grim-autoupdate ]] || ln -s /etc/sv/grim-autoupdate /etc/runit/runsvdir/default/ ;;
     esac
+    v=$(get battery_limit)
+    for b in /sys/class/power_supply/BAT*/charge_control_end_threshold; do [[ -n $v && -w $b ]] && echo "$v" > "$b"; done
     v=$(get boot)
     case $v in lowram) cmd_boot lowram >/dev/null ;; desktop) cmd_boot desktop >/dev/null ;; esac
     [[ $quiet == -q ]] || say "System matches $CONF"
@@ -200,6 +208,9 @@ cmd_install() {
     local p
     for p; do
         case $p in
+            grim-shot|grim-ai)
+                [[ ${GRIM_HELP:-} == 1 ]] || die "$p is installed from grimhelp: run grimhelp, then Install apps > Grim apps"
+                list_add packages "$p" ;;
             @flatpak:*|@src:*) list_add packages "$p" ;;
             *) xbps-query -R "$p" >/dev/null 2>&1 || die "no Void package called $p (try: grimctl search $p)"
                list_add packages "$p" ;;
@@ -282,7 +293,8 @@ build_git() {
     local url=$1 name dir stage ver style
     name=$(src_name "$url"); name=${name%-src}
     dir=$SRC/$name; stage=$SRC/.stage-$name
-    have git || xbps-install -Sy git base-devel
+    have git || xbps-install -Sy git
+    have gcc && have make || xbps-install -Sy base-devel
     mkdir -p "$SRC"
     if [[ -d $dir/.git ]]; then git -C "$dir" pull -q || die "git pull failed"
     else git clone --depth 1 "$url" "$dir" || die "could not clone $url"; fi
@@ -296,7 +308,9 @@ build_git() {
          ninja -C build && DESTDIR=$stage ninja -C build install
     elif [[ -f CMakeLists.txt ]]; then style=cmake
          have cmake || xbps-install -Sy cmake ninja
-         cmake -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release && ninja -C build && DESTDIR=$stage ninja -C build install
+         # extra options for a project can come in GRIM_CMAKE_ARGS (grim-ai uses this for llama.cpp)
+         # shellcheck disable=SC2086
+         cmake -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release ${GRIM_CMAKE_ARGS:-} && ninja -C build && DESTDIR=$stage ninja -C build install
     elif [[ -f Cargo.toml ]]; then style=cargo
          have cargo || xbps-install -Sy cargo
          cargo install --locked --path . --root "$stage/usr" || cargo install --path . --root "$stage/usr"
@@ -418,6 +432,157 @@ cmd_boot() {
     esac
 }
 
+# ------------------------------------------------------------ health: disk, clean, ram, battery, net
+bar() {   # bar PERCENT [WIDTH] -> a red/grey bar
+    local p=${1%.*} w=${2:-24} f i out=""
+    ((p < 0)) && p=0; ((p > 100)) && p=100
+    f=$(( p * w / 100 ))
+    out+=$R; for ((i = 0; i < f; i++)); do out+="█"; done
+    out+=$G; for ((i = f; i < w; i++)); do out+="░"; done
+    printf '%s%s' "$out" "$N"
+}
+human() { numfmt --to=iec --suffix=B "${1:-0}" 2>/dev/null || echo "${1}B"; }
+title() { printf '\n  %s%s%s\n' "$B" "$*" "$N"; }
+
+cmd_disk() {
+    title "Disks"
+    # one line per filesystem (btrfs subvolumes share one)
+    df -h -x tmpfs -x devtmpfs -x efivarfs -x overlay --output=source,target,fstype,size,used,avail,pcent 2>/dev/null | tail -n +2 | awk '!seen[$1]++' | while read -r _ mnt fs size used avail pct; do
+        printf '  %-12s %s %4s  %s of %s, %s free  %s(%s)%s\n' "$mnt" "$(bar "${pct%\%}" 20)" "$pct" "$used" "$size" "$avail" "$G" "$fs" "$N"
+    done
+    title "Biggest folders in your home"
+    du -xhd1 "$HOME" 2>/dev/null | sort -rh | sed -n '2,9p' | while read -r sz path; do printf '  %7s  %s\n' "$sz" "${path/#$HOME/\~}"; done
+    title "Health"
+    local d
+    for d in $(lsblk -dno NAME,TYPE | awk '$2=="disk" && $1 !~ /^(zram|loop|sr)/ {print $1}'); do
+        printf '  /dev/%-9s %s  ' "$d" "$(lsblk -dno SIZE,MODEL "/dev/$d" | xargs)"
+        if ((EUID != 0)); then printf '%s(sudo grimctl disk shows its health)%s\n' "$G" "$N"
+        elif have smartctl; then
+            smartctl -H "/dev/$d" 2>/dev/null | grep -qiE 'PASSED|OK' && printf '%shealthy%s\n' "$R" "$N" || printf 'no health report\n'
+        else printf '%s(grimctl install smartmontools for health checks)%s\n' "$G" "$N"; fi
+    done
+    [[ $(cat /sys/block/*/queue/discard_max_bytes 2>/dev/null | sort -n | tail -1) != 0 ]] && \
+        printf '\n  %sSSD trim:%s run %ssudo fstrim -av%s now and then (or add fstrim to cron)\n' "$G" "$N" "$R" "$N"
+    echo
+}
+
+# grimctl clean [--dry-run]: package cache, unused packages, old kernels, caches, logs, Flatpak leftovers
+cmd_clean() {
+    local dry=no; [[ ${1:-} == --dry-run || ${1:-} == -n ]] && dry=yes
+    [[ $dry == yes ]] || need_root clean "$@"
+    local before after user_home
+    user_home=$(getent passwd "${SUDO_USER:-$USER}" | cut -d: -f6); user_home=${user_home:-$HOME}
+    before=$(df --output=avail -B1 / | tail -1)
+    title "Cleaning$([[ $dry == yes ]] && echo " (dry run: nothing is deleted)")"
+    local cache; cache=$(du -sb /var/cache/xbps 2>/dev/null | cut -f1)
+    printf '  %-34s %s\n' "Downloaded packages" "$(human "$cache")"
+    local orphans; orphans=$(xbps-query -O 2>/dev/null | wc -l)
+    printf '  %-34s %s\n' "Packages nothing needs any more" "$orphans"
+    local kernels; kernels=$(vkpurge list 2>/dev/null | wc -l)
+    printf '  %-34s %s\n' "Old kernels" "$kernels"
+    local thumbs; thumbs=$(du -sb "$user_home/.cache/thumbnails" 2>/dev/null | cut -f1)
+    printf '  %-34s %s\n' "Picture thumbnails" "$(human "${thumbs:-0}")"
+    local logs; logs=$(find /var/log -type f \( -name '*.gz' -o -name '*.old' -o -name '*.[0-9]' \) -printf '%s\n' 2>/dev/null | awk '{s+=$1} END {print s+0}')
+    printf '  %-34s %s\n' "Old logs" "$(human "$logs")"
+    have flatpak && printf '  %-34s %s\n' "Unused Flatpak runtimes" "$(flatpak uninstall --unused --assumeno 2>/dev/null | grep -c '^ *[0-9]')"
+    [[ $dry == yes ]] && { echo; return 0; }
+    echo
+    xbps-remove -Oy >/dev/null 2>&1 && say "Package cache emptied"
+    ((orphans)) && xbps-remove -oy >/dev/null 2>&1 && say "Removed $orphans unused packages"
+    ((kernels)) && vkpurge rm all >/dev/null 2>&1 && say "Removed $kernels old kernels"
+    rm -rf "$user_home/.cache/thumbnails" && say "Thumbnails cleared"
+    find /var/log -type f \( -name '*.gz' -o -name '*.old' -o -name '*.[0-9]' \) -delete 2>/dev/null
+    have flatpak && flatpak uninstall --unused -y --noninteractive >/dev/null 2>&1
+    after=$(df --output=avail -B1 / | tail -1)
+    say "Freed $(human $((after - before)))"
+}
+
+# grimctl ram [drop]: what uses memory, zram, and quick fixes
+cmd_ram() {
+    if [[ ${1:-} == drop ]]; then
+        need_root ram drop; sync; echo 3 > /proc/sys/vm/drop_caches; say "Caches dropped"; return
+    fi
+    local total avail used swap_t swap_u pct
+    read -r total avail < <(awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END {print t, a}' /proc/meminfo)
+    used=$((total - avail)); pct=$((used * 100 / total))
+    title "Memory"
+    printf '  RAM   %s %3d%%  %s used of %s\n' "$(bar $pct)" "$pct" "$(human $((used * 1024)))" "$(human $((total * 1024)))"
+    read -r swap_t swap_u < <(awk '/SwapTotal/{t=$2} /SwapFree/{f=$2} END {print t, t-f}' /proc/meminfo)
+    ((swap_t)) && printf '  swap  %s %3d%%  %s of %s %s\n' "$(bar $((swap_u * 100 / swap_t)))" $((swap_u * 100 / swap_t)) "$(human $((swap_u * 1024)))" "$(human $((swap_t * 1024)))" \
+        "$(grep -q zram /proc/swaps && echo "${G}(zram: compressed in RAM)${N}")"
+    if [[ -r /sys/block/zram0/mm_stat ]]; then
+        local orig compr; read -r orig compr _ < /sys/block/zram0/mm_stat
+        ((compr)) && printf '  zram  %s stored in %s (%sx smaller)\n' "$(human "$orig")" "$(human "$compr")" "$(awk -v a="$orig" -v b="$compr" 'BEGIN{printf "%.1f", a/b}')"
+    fi
+    title "Biggest programs"
+    ps -eo rss=,comm= --sort=-rss | awk '{a[$2]+=$1} END {for (k in a) print a[k], k}' | sort -rn | head -8 | \
+        while read -r kb name; do printf '  %8s  %s\n' "$(human $((kb * 1024)))" "$name"; done
+    printf '\n  %sgrimctl ram drop%s free the file cache   %sgrimctl mode lowram%s stop everything but a console\n\n' "$R" "$N" "$R" "$N"
+}
+
+# grimctl battery [limit N|off]
+cmd_battery() {
+    local b; b=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -1)
+    [[ -n $b ]] || { echo "No battery (a desktop PC?)"; return 0; }
+    if [[ ${1:-} == limit ]]; then
+        [[ -w $b/charge_control_end_threshold || $EUID -ne 0 ]] || true
+        [[ -e $b/charge_control_end_threshold ]] || die "this laptop doesn't let Linux set a charge limit"
+        local n=${2:-80}; [[ $n == off ]] && n=100
+        [[ $n =~ ^[0-9]+$ ]] && ((n >= 40 && n <= 100)) || die "usage: grimctl battery limit 40-100|off"
+        need_root battery limit "$n"
+        echo "$n" > "$b/charge_control_end_threshold" && set_value battery_limit "$n" && say "Charging stops at $n% (kept after reboots)"
+        return
+    fi
+    local cap stat full design cycles now volt power
+    cap=$(cat "$b/capacity"); stat=$(cat "$b/status")
+    full=$(cat "$b/energy_full" 2>/dev/null || cat "$b/charge_full" 2>/dev/null); design=$(cat "$b/energy_full_design" 2>/dev/null || cat "$b/charge_full_design" 2>/dev/null)
+    cycles=$(cat "$b/cycle_count" 2>/dev/null)
+    power=$(cat "$b/power_now" 2>/dev/null)
+    title "Battery ($(cat "$b/model_name" 2>/dev/null || basename "$b"))"
+    printf '  charge   %s %3d%%  %s\n' "$(bar "$cap")" "$cap" "$stat"
+    [[ -n $full && -n $design && $design -gt 0 ]] && printf '  health   %s %3d%%  of when it was new\n' "$(bar $((full * 100 / design)))" $((full * 100 / design))
+    [[ -n $cycles && $cycles != 0 ]] && printf '  cycles   %s\n' "$cycles"
+    [[ -n $power && $power != 0 ]] && printf '  using    %s W\n' "$(awk -v p="$power" 'BEGIN{printf "%.1f", p/1000000}')"
+    [[ -e $b/charge_control_end_threshold ]] && printf '  limit    charging stops at %s%%   %s(grimctl battery limit 80 helps the battery last longer)%s\n' "$(cat "$b/charge_control_end_threshold")" "$G" "$N"
+    echo
+}
+
+# grimctl net [speed | dns cloudflare|quad9|adguard|auto]
+cmd_net() {
+    case ${1:-} in
+        speed)
+            say "Downloading 25 MB from Cloudflare..."
+            local bps; bps=$(curl -s -o /dev/null -w '%{speed_download}' --max-time 30 "https://speed.cloudflare.com/__down?bytes=25000000")
+            local ms; ms=$(ping -c3 -q 1.1.1.1 2>/dev/null | awk -F/ '/rtt|round-trip/{print $5}')
+            printf '  download  %s%s Mbit/s%s   ping %s ms\n' "$B" "$(awk -v b="${bps:-0}" 'BEGIN{printf "%.1f", b*8/1000000}')" "$N" "${ms:-?}"
+            return ;;
+        dns)
+            local servers
+            case ${2:-} in
+                cloudflare) servers="1.1.1.1 1.0.0.1" ;; quad9) servers="9.9.9.9 149.112.112.112" ;;
+                adguard) servers="94.140.14.14 94.140.15.15" ;; auto|"") servers="" ;;
+                *) die "usage: grimctl net dns cloudflare|quad9|adguard|auto" ;;
+            esac
+            local con; con=$(nmcli -t -f NAME,DEVICE connection show --active | grep -v ':lo$' | head -1 | cut -d: -f1)
+            [[ -n $con ]] || die "no active connection"
+            nmcli connection modify "$con" ipv4.dns "$servers" ipv4.ignore-auto-dns "$([[ -n $servers ]] && echo yes || echo no)" &&
+                nmcli connection up "$con" >/dev/null && say "DNS for $con: ${2:-automatic}"
+            return ;;
+    esac
+    title "Network"
+    if have nmcli; then
+        nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device | grep -vE ':(loopback|wifi-p2p):' | while IFS=: read -r dev type state con; do
+            local ip; ip=$(ip -4 -o addr show "$dev" 2>/dev/null | awk '{print $4}' | head -1)
+            printf '  %-10s %-9s %-13s %s %s\n' "$dev" "$type" "$state" "${con:-}" "${ip:+$G$ip$N}"
+        done
+        local sig; sig=$(nmcli -t -f IN-USE,SIGNAL,SSID dev wifi 2>/dev/null | awk -F: '$1=="*"{print $2"% "$3}')
+        [[ -n $sig ]] && printf '  wifi signal  %s\n' "$sig"
+    fi
+    printf '  dns          %s\n' "$(awk '/^nameserver/{printf "%s ", $2}' /etc/resolv.conf)"
+    printf '  internet     %s\n' "$( (ping -c1 -W3 1.1.1.1 || ping -c1 -W3 9.9.9.9) >/dev/null 2>&1 && echo "${R}online${N}" || echo offline)"
+    printf '\n  %sgrimctl net speed%s  speed test    %sgrimctl net dns cloudflare%s  faster/private DNS    %sgrim-wifi%s  join Wi-Fi\n\n' "$R" "$N" "$R" "$N" "$R" "$N"
+}
+
 # ------------------------------------------------------------ misc
 cmd_fetch() {
     [[ ${1:-} == logo && ${2:-} =~ ^(void|reaper)$ ]] || die "usage: grimctl fetch logo void|reaper"
@@ -432,6 +597,20 @@ cmd_zram() {
         zramctl 2>/dev/null || cat /proc/swaps
         printf '\nswappiness %s, size from %s: zram = %s\n' "$(cat /proc/sys/vm/swappiness)" "$CONF" "$(get zram || echo 50%)"
     else echo "zram is off (zram = off in $CONF, or the grim-zram service isn't running)"; fi
+}
+
+# grimctl set KEY VALUE: change one line of the system file and apply it
+cmd_set() {
+    need_root set "$@"
+    [[ $# -eq 2 ]] || die "usage: grimctl set KEY VALUE   (like: grimctl set auto_update weekly)"
+    case $1 in
+        hostname|timezone|keymap|desktop|boot|auto_update|zram|battery_limit) ;;
+        *) die "grimctl set knows: hostname timezone keymap desktop boot auto_update zram battery_limit" ;;
+    esac
+    set_value "$1" "$2"
+    cmd_apply -q
+    [[ $1 == zram ]] && sv restart grim-zram >/dev/null 2>&1
+    say "$1 = $2"
 }
 
 cmd_edit() {
@@ -454,7 +633,13 @@ case ${1:-help} in
     wifi)      shift; exec grim-wifi "$@" ;;
     fetch)     shift; cmd_fetch "$@" ;;
     zram)      cmd_zram ;;
+    disk)      cmd_disk ;;
+    clean)     shift; cmd_clean "$@" ;;
+    ram)       shift; cmd_ram "$@" ;;
+    battery|bat) shift; cmd_battery "$@" ;;
+    net)       shift; cmd_net "$@" ;;
     get)       shift; get "${1:?usage: grimctl get KEY}" ;;
-    -h|--help|help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//' ;;
+    set)       shift; cmd_set "$@" ;;
+    -h|--help|help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//' ;;
     *) die "unknown command: $1 (grimctl help)" ;;
 esac

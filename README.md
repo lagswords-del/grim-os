@@ -17,10 +17,13 @@ Both editions install **offline** from the USB or **online**, have a **Low RAM**
 ## Grim Void highlights
 
 - **`/etc/grim/system.conf`**: the whole system in one file, a bit like NixOS. Add a package line and `grimctl apply` installs it; delete it and it's removed; things you install with `xbps-install` are added to the file. Auto-updates daily or weekly.
-- **`grimctl`**: `apply`, `update`, `install`, `search`, `build NAME|URL` (compile a Void recipe for your CPU, or any git project, wrapped as a real xbps package), `wallpaper set FILE`, `mode lowram|desktop`, `boot lowram|desktop`.
+- **`grimctl`**: `apply`, `update`, `install`, `search`, `build NAME|URL` (compile a Void recipe for your CPU, or any git project, wrapped as a real xbps package), `set KEY VALUE`, `wallpaper set FILE`, `mode lowram|desktop`, `boot lowram|desktop`.
 - **`grimhelp`**: a TUI app centre (an app list, search across Void and Flathub with a "compile from source" option), Wi-Fi, wallpaper, desktop choice and help pages.
 - **`grim-wifi`**: finds your Wi-Fi hardware, says when a driver or firmware is missing, lists networks by number.
 - **`grim-spotify`**: Spotify in the terminal with lyrics, cover art and playlists (built on spotify-player; needs Spotify Premium).
+- **Quick settings** in grimhelp: Wi-Fi, Bluetooth, volume, brightness, do-not-disturb, night light, DNS, battery charge limit, updates, zram, keyboard, time zone.
+- **`grimctl disk | clean | ram | battery | net`**: disk space and health, one-command clean-up, memory and zram savings, battery health and charge limit, network info, speed test and DNS switching.
+- **Grim apps** (installed from grimhelp): **Grim Shot** for screenshots, recordings and GIFs on X11 and Wayland (Super+Shift+S), and **grim-ai**, a local AI chat with the Grim face, running llama.cpp on your PC or Ollama on another computer.
 - The same keys on every desktop: Super+Enter terminal, Super+Q close, Super+F fullscreen, Super+T floating, Super+D launcher.
 
 ## Building

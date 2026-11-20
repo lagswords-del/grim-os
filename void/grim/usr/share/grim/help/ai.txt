@@ -1,0 +1,16 @@
+grim-ai (a local AI chat)
+=========================
+Install it from grimhelp > Install apps > Grim apps, then run: grim-ai
+
+The first time, it asks where the AI should run:
+  1  On this PC: private and offline. Grim builds llama.cpp for your CPU (5-15 minutes,
+     once) and downloads a model: Qwen 2.5 0.5B (470 MB), 1.5B (1.1 GB, recommended)
+     or 3B (2 GB). The AI only uses RAM while grim-ai is open.
+  2  On another computer: any Ollama or llama.cpp server on your network.
+
+  grim-ai                 the chat: the Grim face at the top, the text bar at the bottom
+  grim-ai "question"      one answer, printed      cat file | grim-ai "explain this"
+  grim-ai setup           change where it runs or the model
+
+Keys: Enter send, Esc stop, Up/Down earlier messages, PgUp/PgDn scroll, Ctrl+C quit.
+Type /clear for a new chat, /setup to change the AI.

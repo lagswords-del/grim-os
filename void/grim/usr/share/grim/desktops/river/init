@@ -7,6 +7,7 @@ riverctl map normal Super T toggle-float
 riverctl map normal Super D spawn fuzzel
 riverctl map normal Super W spawn 'grim-term -e grim-wifi'
 riverctl map normal Super+Shift E exit
+riverctl map normal Super+Shift S spawn grim-shot-key
 riverctl map normal Super J focus-view next
 riverctl map normal Super K focus-view previous
 riverctl map normal Super+Shift J swap next

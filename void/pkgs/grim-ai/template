@@ -1,0 +1,16 @@
+# Template file for 'grim-ai'
+# Grim Void's terminal AI chat. build.sh copies extras/grim-ai into files/root.
+# Offered in grimhelp (Install apps > Grim apps). The model runs in llama.cpp (built by
+# "grim-ai setup" with grimctl build) or on another computer (Ollama / llama.cpp).
+pkgname=grim-ai
+version=1.0.0
+revision=1
+depends="python3 curl"
+short_desc="Grim Void: a local AI chat in the terminal with the Grim face"
+maintainer="Grim OS <grimos@localhost>"
+license="MIT"
+homepage="https://github.com/lagswords-del/grim-os"
+
+do_install() {
+	cp -a ${FILESDIR}/root/. ${DESTDIR}/
+}

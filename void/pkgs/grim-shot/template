@@ -1,0 +1,15 @@
+# Template file for 'grim-shot'
+# Grim Void's screenshot and screen recording tool. build.sh copies extras/grim-shot into files/root.
+# Offered in grimhelp (Install apps > Grim apps).
+pkgname=grim-shot
+version=1.0.0
+revision=1
+depends="bash libnotify xdg-utils maim slop xclip xdotool ffmpeg grim slurp wl-clipboard wf-recorder"
+short_desc="Grim Void: screenshots and screen recordings (area, window, full, GIF)"
+maintainer="Grim OS <grimos@localhost>"
+license="MIT"
+homepage="https://github.com/lagswords-del/grim-os"
+
+do_install() {
+	cp -a ${FILESDIR}/root/. ${DESTDIR}/
+}

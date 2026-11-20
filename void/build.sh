@@ -57,6 +57,9 @@ stage_pkgs() {
     ln -sfn linux-grim "$VP/srcpkgs/linux-grim-headers"; ln -sfn linux-grim "$VP/srcpkgs/linux-grim-dbg"
     mkdir -p "$VP/srcpkgs/grim-tools/files/root" "$VP/srcpkgs/grimfetch/files/src"
     cp -a grim/. "$VP/srcpkgs/grim-tools/files/root/"
+    # optional Grim apps (offered in grimhelp): their files live in extras/NAME
+    local x
+    for x in extras/*/; do x=$(basename "$x"); mkdir -p "$VP/srcpkgs/$x/files/root"; cp -a "extras/$x/." "$VP/srcpkgs/$x/files/root/"; done
     cp -a ../shared/grimfetch/{Cargo.toml,Cargo.lock,src} "$VP/srcpkgs/grimfetch/files/src/" 2>/dev/null || cp -a ../shared/grimfetch/{Cargo.toml,src} "$VP/srcpkgs/grimfetch/files/src/"
     sed -i "s/^version = .*/version = \"$VER\"/" "$VP/srcpkgs/grimfetch/files/src/Cargo.toml"
     # packages built in the second build root (hostdir2) join the main local repository
@@ -65,8 +68,8 @@ stage_pkgs() {
     fi
     cd "$VP"
     local p force
-    for p in linux-grim grimfetch grim-tools grim-base dwm-grim spotify-player-grim; do
-        force=; [[ $p == grim-tools || $p == grimfetch || $p == grim-base ]] && force=-f
+    for p in linux-grim grimfetch grim-tools grim-base dwm-grim spotify-player-grim grim-shot grim-ai; do
+        force=; [[ $p == grim-tools || $p == grimfetch || $p == grim-base || $p == grim-shot || $p == grim-ai || $p == dwm-grim ]] && force=-f
         if [[ -z $force ]] && ls "$BIN/$p-"[0-9]*."$ARCH.xbps" >/dev/null 2>&1; then say "$p: already built"; continue; fi
         say "Building $p"
         ./xbps-src -A "$ARCH" -m "$MD" $force pkg "$p"

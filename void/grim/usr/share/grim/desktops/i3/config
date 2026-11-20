@@ -12,6 +12,7 @@ bindsym $mod+t floating toggle
 bindsym $mod+d exec rofi -show drun
 bindsym $mod+w exec grim-term -e grim-wifi
 bindsym $mod+Shift+e exec i3-msg exit
+bindsym $mod+Shift+s exec --no-startup-id grim-shot-key
 bindsym $mod+Shift+r restart
 bindsym $mod+h focus left
 bindsym $mod+j focus down

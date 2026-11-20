@@ -5,3 +5,4 @@ key "Super+e"           pcmanfm
 key "Super+w"           grim-term -e grim-wifi
 key "Super+Shift+e"     icesh logout
 key "Print"             sh -c 'mkdir -p ~/Pictures && maim ~/Pictures/shot-$(date +%s).png'
+key "Super+Shift+s"     grim-shot-key
