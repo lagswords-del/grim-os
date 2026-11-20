@@ -1,10 +1,12 @@
 const send = m => browser.runtime.sendMessage(m);
 (async () => {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  let site = ""; try { site = new URL(tab.url).hostname.replace(/^www\./, ""); } catch (e) {}
+  let site = "";
+  try { const u = new URL(tab.url); if (/^https?:$/.test(u.protocol)) site = u.hostname.replace(/^www\./, ""); } catch (e) {}
   const st = await send({ type: "state", tabId: tab.id });
   document.getElementById("count").textContent = st.blockedHere;
   document.getElementById("site").textContent = site || "this page";
+  if (!site) document.getElementById("here").closest(".switch").style.display = "none";   // Grim's own pages, files
   const here = document.getElementById("here");
   here.checked = st.settings.blocker && !st.settings.allow.includes(site);
   here.disabled = !site || !st.settings.blocker;
@@ -16,8 +18,17 @@ const send = m => browser.runtime.sendMessage(m);
   document.getElementById("tor").textContent = t.ok
     ? (t.ready ? "Tor is connected" : `Tor is starting (${t.progress || 0}%)`)
     : "Tor isn't running: start Grim Browser from its icon or the grim-browser command";
-  document.getElementById("burn").onclick = async () => {
-    if (!confirm("Burn everything?\n\nCookies, history, cache and site data are deleted, every tab closes, and Tor gets a new identity. This can't be undone.")) return;
+  // Burn asks inside the popup (Firefox cuts off normal dialogs in extension popups)
+  const burnBtn = document.getElementById("burn");
+  let armed = null;
+  burnBtn.onclick = async () => {
+    if (!armed) {
+      burnBtn.textContent = "Press again: delete everything, close all tabs";
+      armed = setTimeout(() => { armed = null; burnBtn.textContent = "🔥 Burn everything"; }, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    burnBtn.textContent = "Burning…"; burnBtn.disabled = true;
     await send({ type: "burn" }); window.close();
   };
   document.getElementById("newid").onclick = async () => {

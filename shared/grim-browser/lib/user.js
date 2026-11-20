@@ -129,3 +129,4 @@ user_pref("browser.tabs.allow_transparent_browser", true);
 user_pref("browser.startup.page", 1);
 user_pref("browser.download.useDownloadDir", false);            // ask where to save
 user_pref("browser.tabs.firefox-view", false);
+user_pref("browser.toolbars.bookmarks.visibility", "never");
