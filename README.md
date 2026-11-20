@@ -10,7 +10,7 @@ A dark, red-and-black Linux distro with its own installer, tools and kernel, in 
 | Kernel | `linux-grim`: Arch's 7.3 + BORE scheduler | `linux-grim`: Void's 6.18 + BORE scheduler |
 | Installer | `griminstall` (dialog menus) | `grim-install` (plain numbered questions) |
 | Desktops | Grim DE (niri + Quickshell), KDE, GNOME, COSMIC, XFCE, Hyprland, niri, Sway, i3, Openbox, IceWM | IceWM, niri, Openbox, i3, dwm, river |
-| Latest | 1.1.5 (+ Grim Lite 1.1.3) | 1.2.0 |
+| Latest | 1.1.5 (+ Grim Lite 1.1.3) | 1.2.1 |
 
 Both editions install **offline** from the USB or **online**, have a **Low RAM** boot entry (a console with nothing else running), compressed swap in RAM (zram), and share [`grimfetch`](shared/grimfetch), a system-info tool with the Grim reaper or the Grim Void ring.
 
@@ -40,7 +40,7 @@ cd ../.. && sudo ./build.sh                  # full ISO   (sudo ./build.sh lite 
 ```bash
 cd void
 ./build.sh            # as your user: tools, Grim's packages incl. the kernel (~2 h the first time), offline repo
-sudo ./build.sh iso   # the ISO: out/grim-void-1.2.0-x86_64-musl.iso
+sudo ./build.sh iso   # the ISO: out/grim-void-1.2.1-x86_64-musl.iso
 ./run-vm.sh           # try it in QEMU (UEFI)
 ```
 

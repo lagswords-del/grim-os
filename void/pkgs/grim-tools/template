@@ -1,7 +1,7 @@
 # Template file for 'grim-tools'
 # Grim Void's own commands, configs and artwork. build.sh copies grimvoid/grim/ into files/root.
 pkgname=grim-tools
-version=1.2.0
+version=1.2.1
 revision=1
 depends="bash dialog pciutils usbutils util-linux procps-ng iputils NetworkManager grimfetch"
 short_desc="Grim Void: grimctl, grimhelp, grim-install, grim-wifi, desktop configs"

@@ -1,12 +1,12 @@
 diff --git a/data/issue b/data/issue
-index c6b86b0..47644cd 100644
+index c6b86b0..0befdf8 100644
 --- a/data/issue
 +++ b/data/issue
 @@ -1,28 +1,7 @@
 -###############################################################################
  
 -Welcome to the Void Linux Live system. Two users are available to log in:
-+  Grim Void 1.2.0 live USB
++  Grim Void live USB
  
 -	- root:voidlinux
 -	- anon:voidlinux

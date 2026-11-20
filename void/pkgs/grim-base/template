@@ -2,7 +2,7 @@
 # Grim Void's base system: Void's base-system without a kernel (you pick one), a lighter
 # set of tools, NetworkManager, elogind and Grim's tools.
 pkgname=grim-base
-version=1.2.0
+version=1.2.1
 revision=1
 metapackage=yes
 short_desc="Grim Void base system meta package"
