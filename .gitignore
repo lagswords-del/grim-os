@@ -51,3 +51,11 @@ arch/profile/airootfs/usr/share/grimos/grub-theme/background.png
 arch/profile/grub/themes/grimos/background.png
 arch/profile/syslinux/splash.png
 arch/profile/airootfs/usr/share/grimos/wallpapers/
+
+# Grim Boot test ISOs
+boot/test-isos/
+boot/vm/*.img
+boot/vm/*.fd
+boot/vm/*.png
+boot/vm/qmp.sock
+boot/vm/*.log

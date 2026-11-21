@@ -1,0 +1,242 @@
+#!/bin/bash
+# grim-boot: make and manage Grim Boot USB sticks (a GRUB-based ISO launcher, like Ventoy).
+#
+#   grim-boot                     every USB stick: Grim Boot on it or not, and its ISO files
+#   grim-boot install DEVICE      put Grim Boot on a USB stick (ERASES it), like /dev/sdb
+#   grim-boot add ISO... [DEVICE] copy ISO files onto a Grim Boot stick (into /isos)
+#   grim-boot remove NAME [DEVICE] delete an ISO from a Grim Boot stick
+#   grim-boot update [DEVICE]     refresh the boot menu and artwork, keeping the ISOs
+#   grim-boot image FILE [SIZE]   make a Grim Boot disk image instead of a stick (for testing)
+#
+# Linux distros (Grim OS, Grim Void, Arch, Ubuntu, Fedora, Debian...) and BSDs (FreeBSD,
+# OpenBSD, NetBSD) boot straight from their ISO files. DEVICE can be left out when exactly one
+# Grim Boot stick is plugged in.
+set -uo pipefail
+HERE=$(dirname "$(readlink -f "$0")")
+VERSION=1.0.0
+R=$'\e[31m' B=$'\e[1;97m' G=$'\e[90m' N=$'\e[0m' OK=$'\e[32m✓\e[0m' NO=$'\e[31m✗\e[0m'
+DATA_LABEL=GRIMBOOT
+EFI_LABEL=GRIMBOOTEFI
+EFI_MB=128
+
+die() { printf '%s!!%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
+say() { printf '%s::%s %s\n' "$R" "$N" "$*"; }
+human() { numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "$1"; }
+
+# ------------------------------------------------------------------ finding sticks
+usb_disks() { lsblk -dnpo NAME,TRAN,TYPE | awk '$2=="usb" && $3=="disk" {print $1}'; }
+part_by_label() { lsblk -lnpo NAME,LABEL "$1" | awk -v l="$2" '$2==l {print $1; exit}'; }
+is_grimboot() { [[ -n $(part_by_label "$1" "$DATA_LABEL") && -n $(part_by_label "$1" "$EFI_LABEL") ]]; }
+
+# mount a partition for reading (udisks, no root needed); echoes the mount point.
+# MOUNTED_BY_US lists what to unmount afterwards.
+MOUNTED_BY_US=()
+mount_part() {
+    local p=$1 m
+    m=$(lsblk -no MOUNTPOINTS "$p" | head -1)
+    if [[ -z $m ]]; then
+        m=$(udisksctl mount -b "$p" --no-user-interaction 2>/dev/null | sed -n 's/^Mounted .* at \(.*\)$/\1/p' | sed 's/\.$//')
+        [[ -n $m ]] && MOUNTED_BY_US+=("$p")
+    fi
+    echo "$m"
+}
+cleanup() { local p; for p in "${MOUNTED_BY_US[@]}"; do udisksctl unmount -b "$p" --no-user-interaction >/dev/null 2>&1; done; }
+trap cleanup EXIT
+
+pick_device() {   # pick_device [DEVICE] -> the Grim Boot stick to use
+    if [[ -n ${1:-} ]]; then
+        [[ -b $1 ]] || die "$1 isn't a disk"
+        is_grimboot "$1" || die "$1 doesn't have Grim Boot on it (grim-boot install $1)"
+        echo "$1"; return
+    fi
+    local d found=()
+    for d in $(usb_disks) $(lsblk -dnpo NAME | grep loop); do is_grimboot "$d" && found+=("$d"); done
+    ((${#found[@]} == 1)) && { echo "${found[0]}"; return; }
+    ((${#found[@]} == 0)) && die "no Grim Boot stick is plugged in (grim-boot install DEVICE makes one)"
+    die "more than one Grim Boot stick: say which (${found[*]})"
+}
+
+# ------------------------------------------------------------------ list
+list_isos() {   # list_isos MOUNTPOINT
+    local m=$1 f
+    find "$m" -maxdepth 3 -type f \( -iname '*.iso' -o -iname '*.img' \) -printf '%s\t%P\n' 2>/dev/null | sort -k2 | while IFS=$'\t' read -r size f; do
+        printf '        %s  %s\n' "$(printf '%7s' "$(human "$size")")" "$f"
+    done
+}
+
+cmd_list() {
+    local disks; disks=$(usb_disks)
+    [[ -n $disks ]] || { echo "No USB sticks are plugged in."; return; }
+    local d
+    for d in $disks; do
+        local model size vendor
+        read -r size model < <(lsblk -dno SIZE,MODEL "$d")
+        vendor=$(lsblk -dno VENDOR "$d" | xargs)
+        printf '\n%s%s%s %s(%s, %s)%s :\n' "$B" "$(echo "$vendor $model" | xargs)" "$N" "$G" "$d" "$size" "$N"
+        if is_grimboot "$d"; then
+            local p m ver=""
+            p=$(part_by_label "$d" "$EFI_LABEL"); m=$(mount_part "$p")
+            [[ -n $m && -f $m/grim-boot.txt ]] && ver=$(sed -n 's/^version=//p' "$m/grim-boot.txt")
+            printf '      %s Grim Boot %s\n' "$OK" "$ver"
+            p=$(part_by_label "$d" "$DATA_LABEL"); m=$(mount_part "$p")
+            if [[ -z $m ]]; then echo "        (couldn't open the ISO partition)"
+            else
+                local isos; isos=$(list_isos "$m")
+                if [[ -n $isos ]]; then echo "$isos"; else echo "        no ISO files yet: grim-boot add FILE.iso"; fi
+                printf '        %sfree: %s%s\n' "$G" "$(df -h --output=avail "$m" | tail -1 | xargs)" "$N"
+            fi
+        else
+            printf '      %s Grim Boot\n' "$NO"
+            # what is on it instead: a written ISO, or partitions with ISO files (Ventoy...)
+            local fstype label
+            read -r fstype label < <(lsblk -dno FSTYPE,LABEL "$d")
+            if [[ $fstype == iso9660 ]]; then
+                printf '        a whole ISO written to it: %s\n' "${label:-no label}"
+            else
+                local p any=""
+                for p in $(lsblk -lnpo NAME,TYPE "$d" | awk '$2=="part" {print $1}'); do
+                    local m; m=$(mount_part "$p") || true
+                    [[ -z $m ]] && continue
+                    local isos; isos=$(list_isos "$m")
+                    [[ -n $isos ]] && { echo "$isos"; any=1; }
+                done
+                [[ -n $any ]] || echo "        no ISO files"
+            fi
+        fi
+    done
+    echo
+}
+
+# ------------------------------------------------------------------ install (needs root)
+do_install() {   # do_install DEVICE  (as root)
+    local dev=$1 total data efi_start m
+    local p_data p_efi
+    total=$(( $(blockdev --getsize64 "$dev") / 1048576 ))
+    (( total > EFI_MB + 64 )) || die "$dev is too small"
+    data=$(( total - EFI_MB - 2 ))
+    say "Unmounting anything on $dev"
+    for p in $(lsblk -lnpo NAME "$dev" | tail -n +2); do umount "$p" 2>/dev/null; done
+    say "Erasing $dev"
+    wipefs -af "$dev" >/dev/null
+    dd if=/dev/zero of="$dev" bs=1M count=4 conv=fsync status=none
+    say "Partitions: GRIMBOOT (exFAT, ${data} MiB for ISOs) and GRIMBOOTEFI (FAT32, ${EFI_MB} MiB)"
+    # MBR like Ventoy: works with BIOS and UEFI; the ISO partition comes first so every OS sees it
+    sfdisk -q "$dev" <<EOF
+label: dos
+start=2048, size=${data}MiB, type=7
+size=${EFI_MB}MiB, type=ef, bootable
+EOF
+    udevadm settle; partprobe "$dev" 2>/dev/null; sleep 1
+    if [[ $dev =~ (loop|nvme|mmcblk)[0-9]+$ ]]; then p_data=${dev}p1; p_efi=${dev}p2; else p_data=${dev}1; p_efi=${dev}2; fi
+    mkfs.exfat -L "$DATA_LABEL" "$p_data" >/dev/null || die "mkfs.exfat failed"
+    mkfs.fat -F 32 -n "$EFI_LABEL" "$p_efi" >/dev/null || die "mkfs.fat failed"
+    m=$(mktemp -d)
+    mount "$p_efi" "$m" || die "couldn't mount $p_efi"
+    say "Installing GRUB for 64-bit UEFI"
+    grub-install --target=x86_64-efi --efi-directory="$m" --boot-directory="$m/boot" --removable --no-nvram >/dev/null 2>&1 || { umount "$m"; die "grub-install (x86_64-efi) failed"; }
+    if [[ -d /usr/lib/grub/i386-efi ]]; then
+        say "Installing GRUB for 32-bit UEFI"
+        grub-install --target=i386-efi --efi-directory="$m" --boot-directory="$m/boot" --removable --no-nvram >/dev/null 2>&1 || say "(32-bit UEFI skipped)"
+    fi
+    if [[ -d /usr/lib/grub/i386-pc ]]; then
+        say "Installing GRUB for BIOS (legacy)"
+        grub-install --target=i386-pc --boot-directory="$m/boot" "$dev" >/dev/null 2>&1 || say "(BIOS boot skipped: grub-install i386-pc failed)"
+    fi
+    copy_menu "$m"
+    sync; umount "$m"; rmdir "$m"
+    # a README on the ISO partition
+    m=$(mktemp -d)
+    if mount "$p_data" "$m"; then
+        mkdir -p "$m/isos"
+        printf 'This is a Grim Boot USB stick.\nCopy ISO files here (or into the isos folder) and boot the stick: each ISO shows up in the menu.\nhttps://github.com/lagswords-del/grim-os\n' > "$m/README-GRIM-BOOT.txt"
+        sync; umount "$m"
+    fi
+    rmdir "$m"
+    say "Grim Boot is on $dev. Add ISOs with: grim-boot add FILE.iso"
+}
+
+copy_menu() {   # copy_menu ESP_MOUNTPOINT
+    local m=$1
+    install -Dm644 "$HERE/grub/grub.cfg" "$m/boot/grub/grub.cfg"
+    install -Dm644 "$HERE/grub/grimboot-bg.png" "$m/boot/grub/grimboot-bg.png"
+    install -Dm644 "$HERE/grub/fonts/unicode.pf2" "$m/boot/grub/fonts/unicode.pf2"
+    printf 'Grim Boot\nversion=%s\nmade=%s\n' "$VERSION" "$(date -u +%Y-%m-%d)" > "$m/grim-boot.txt"
+}
+
+cmd_install() {
+    local dev=${1:-}
+    [[ -b $dev ]] || die "usage: grim-boot install DEVICE   (like /dev/sdb; see the list with: grim-boot)"
+    [[ $(lsblk -dno TYPE "$dev") == disk || $dev == /dev/loop* ]] || die "$dev is a partition: give the whole disk (like /dev/sdb)"
+    local root_disk; root_disk=$(lsblk -no PKNAME "$(findmnt -no SOURCE / | sed 's/\[.*//')" 2>/dev/null)
+    [[ -n $root_disk && $dev == /dev/$root_disk ]] && die "$dev is the disk this PC runs from"
+    if [[ ${GRIMBOOT_YES:-} != 1 ]]; then
+        lsblk -o NAME,SIZE,MODEL,LABEL,FSTYPE "$dev"
+        printf '\n%sEverything on %s will be erased.%s\nType yes to go ahead: ' "$R" "$dev" "$N"
+        read -r ans; [[ $ans == yes || $ans == "${dev#/dev/}" ]] || die "stopped: nothing was changed"
+    fi
+    if ((EUID != 0)); then exec sudo GRIMBOOT_YES=1 "$0" install "$dev"; fi
+    do_install "$dev"
+}
+
+# ------------------------------------------------------------------ add / remove / update
+cmd_add() {
+    local dev="" isos=() a
+    for a; do if [[ -b $a ]]; then dev=$a; else isos+=("$a"); fi; done
+    ((${#isos[@]})) || die "usage: grim-boot add FILE.iso... [DEVICE]"
+    dev=$(pick_device "$dev") || exit 1
+    local m; m=$(mount_part "$(part_by_label "$dev" "$DATA_LABEL")")
+    [[ -n $m ]] || die "couldn't open the ISO partition on $dev"
+    mkdir -p "$m/isos"
+    local f name
+    for f in "${isos[@]}"; do
+        [[ -f $f ]] || { echo "skipping $f: no such file"; continue; }
+        name=$(basename "$f"); name=${name// /-}     # spaces would break the boot command line
+        local need free; need=$(stat -c %s "$f"); free=$(df --output=avail -B1 "$m" | tail -1)
+        (( need < free )) || { echo "skipping $name: not enough space ($(human "$free") free)"; continue; }
+        say "Copying $name ($(human "$need"))"
+        if command -v rsync >/dev/null; then rsync --info=progress2 --no-perms --no-owner --no-group "$f" "$m/isos/$name"; else cp "$f" "$m/isos/$name"; fi
+    done
+    say "Syncing (wait for this before unplugging)"; sync
+    say "Done."
+}
+
+cmd_remove() {
+    local dev="" name="" a
+    for a; do if [[ -b $a ]]; then dev=$a; else name=$a; fi; done
+    [[ -n $name ]] || die "usage: grim-boot remove NAME [DEVICE]"
+    dev=$(pick_device "$dev") || exit 1
+    local m; m=$(mount_part "$(part_by_label "$dev" "$DATA_LABEL")")
+    local f; f=$(find "$m" -maxdepth 3 -type f -name "$name" | head -1)
+    [[ -n $f ]] || die "no ISO called $name on $dev"
+    rm -f "$f" && sync && say "Removed ${f#$m/}"
+}
+
+cmd_update() {
+    local dev; dev=$(pick_device "${1:-}") || exit 1
+    local m; m=$(mount_part "$(part_by_label "$dev" "$EFI_LABEL")")
+    [[ -n $m ]] || die "couldn't open the boot partition on $dev"
+    copy_menu "$m" && sync && say "Boot menu and artwork updated on $dev (ISOs untouched)."
+}
+
+cmd_image() {   # a disk image for testing in a VM
+    local file=${1:?usage: grim-boot image FILE [SIZE like 8G]} size=${2:-8G}
+    ((EUID == 0)) || exec sudo "$0" image "$file" "$size"
+    truncate -s "$size" "$file"
+    local loop; loop=$(losetup -fP --show "$file")
+    GRIMBOOT_YES=1 do_install "$loop"
+    losetup -d "$loop"
+    [[ -n ${SUDO_UID:-} ]] && chown "$SUDO_UID:$SUDO_GID" "$file"
+    say "Made $file. Add ISOs: grim-boot add FILE.iso \$(udisksctl loop-setup -f $file | grep -o '/dev/loop[0-9]*')"
+}
+
+case ${1:-list} in
+    list|ls)  cmd_list ;;
+    install)  shift; cmd_install "$@" ;;
+    add)      shift; cmd_add "$@" ;;
+    remove|rm) shift; cmd_remove "$@" ;;
+    update)   shift; cmd_update "$@" ;;
+    image)    shift; cmd_image "$@" ;;
+    -h|--help|help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' ;;
+    -v|--version) echo "grim-boot $VERSION" ;;
+    *) die "unknown: $1 (grim-boot help)" ;;
+esac
